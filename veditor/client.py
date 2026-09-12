@@ -32,9 +32,14 @@ class VEditorClient:
         api_key: str | None = None,
         timeout: float | None = None,
         session: requests.Session | None = None,
+        event: Any | None = None,
     ):
-        # 1. Resolve configuration from parameters, settings, or environment
+        # 1. Resolve configuration from parameters, event settings, Django settings, or environment
         def _get_conf(name: str) -> Any:
+            if event is not None and hasattr(event, "settings"):
+                val = event.settings.get(name.lower())
+                if val:
+                    return val
             if getattr(settings, "configured", False):
                 return getattr(settings, name, None)
             return None

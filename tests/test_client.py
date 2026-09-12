@@ -197,6 +197,26 @@ def test_client_init_retry_adapter_configured():
     assert 502 in http_adapter.max_retries.status_forcelist
 
 
+def test_client_init_from_event_settings():
+    class MockSettings:
+        def __init__(self, data):
+            self.data = data
+
+        def get(self, key):
+            return self.data.get(key)
+
+    mock_event = SimpleNamespace(
+        settings=MockSettings(
+            {
+                "veditor_api_base_url": "https://veditor.eventyay.com",
+                "veditor_api_key": "event-specific-key",
+            }
+        )
+    )
+    with patch.dict("os.environ", {}, clear=True):
+        client = VEditorClient(event=mock_event)
+        assert client.base_url == "https://veditor.eventyay.com"
+        assert client.api_key == "event-specific-key"
 # ============================================================================
 # Client API Request & Endpoint Tests
 # ============================================================================
