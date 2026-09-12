@@ -1,0 +1,125 @@
+{% extends "eventyay_common/event/base.html" %}
+{% load i18n %}
+{% load static %}
+
+{% block title %}{% trans "VEditor Video Studio" %} :: {{ event.name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>
+        {% trans "VEditor Video Studio" %}
+        <small>{{ event.name }}</small>
+    </h1>
+</div>
+
+<div class="row">
+    <div class="col-xs-12 col-md-8">
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <h3 class="panel-title">
+                    <i class="fa fa-video-camera"></i> {% trans "Connect to Video Editor" %}
+                </h3>
+            </div>
+            <div class="panel-body">
+                <p>
+                    {% blocktrans trimmed %}
+                    VEditor allows conference organizers to review recording streams, trim talk segments,
+                    attach intro and outro bumpers, and dispatch preview clips to speakers for review.
+                    {% endblocktrans %}
+                </p>
+
+                {% if veditor_configured %}
+                    <div class="alert alert-info">
+                        <i class="fa fa-info-circle"></i>
+                        <strong>{% trans "VEditor Service" %}:</strong> <code>{{ veditor_base_url }}</code>
+                    </div>
+
+                    <div class="well">
+                        <h4>{% trans "Schedule Synchronization" %}</h4>
+                        <p>
+                            {% blocktrans trimmed with count=talks_count %}
+                            There are <strong>{{ count }}</strong> scheduled talk(s) ready to synchronize with VEditor.
+                            {% endblocktrans %}
+                        </p>
+
+                        <form method="post" action="">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-primary btn-lg" id="btn-launch-veditor" {% if not talks_count %}disabled{% endif %}>
+                                <i class="fa fa-external-link"></i> {% trans "Sync Talks & Launch VEditor" %}
+                            </button>
+                            {% if not talks_count %}
+                                <p class="text-muted" style="margin-top: 8px;">
+                                    <small>{% trans "No scheduled talks found for this event. Schedule talks to synchronize." %}</small>
+                                </p>
+                            {% endif %}
+                        </form>
+                    </div>
+                {% else %}
+                    <div class="alert alert-warning">
+                        <i class="fa fa-exclamation-triangle"></i>
+                        <strong>{% trans "Configuration Missing" %}:</strong>
+                        <p>
+                            {{ config_error|default:_("VEditor integration is not yet configured. Please ensure VEDITOR_API_BASE_URL and VEDITOR_API_KEY are configured in your environment or settings.") }}
+                        </p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if talks %}
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <h3 class="panel-title">
+                    <i class="fa fa-list"></i> {% trans "Talks Scheduled for Sync" %} ({{ talks_count }})
+                </h3>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-striped table-hover">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Code" %}</th>
+                            <th>{% trans "Title" %}</th>
+                            <th>{% trans "Room" %}</th>
+                            <th>{% trans "Schedule Time (UTC)" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for slot in talks %}
+                        <tr>
+                            <td><code>{{ slot.submission.code|default:slot.id }}</code></td>
+                            <td><strong>{{ slot.submission.title|default:slot.description }}</strong></td>
+                            <td>{{ slot.room.name|default:"—" }}</td>
+                            <td>
+                                {% if slot.start %}
+                                    {{ slot.start|date:"Y-m-d H:i" }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="col-xs-12 col-md-4">
+        <div class="panel panel-info">
+            <div class="panel-heading">
+                <h3 class="panel-title">
+                    <i class="fa fa-question-circle"></i> {% trans "How it works" %}
+                </h3>
+            </div>
+            <div class="panel-body">
+                <ol style="padding-left: 18px;">
+                    <li>{% trans "Clicking 'Sync & Launch' atomically synchronizes talk titles, speaker info, and timings with VEditor." %}</li>
+                    <li>{% trans "A secure single sign-on token is requested for your organizer session." %}</li>
+                    <li>{% trans "You are instantly redirected to your conference dashboard in VEditor without logging in again." %}</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
