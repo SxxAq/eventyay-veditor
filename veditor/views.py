@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from django.contrib import messages
@@ -16,6 +17,7 @@ from eventyay.control.permissions import EventPermissionRequiredMixin
 
 from .client import VEditorClient
 from .exceptions import VEditorConfigError, VEditorError
+from .forms import VEditorSettingsForm
 
 
 class ConnectView(EventPermissionRequiredMixin, TemplateView):
@@ -37,7 +39,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             )
 
     def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
-        """Populate template context with event details and talk counts."""
+        """Populate template context with event details, talk counts, and settings form."""
         context = super().get_context_data(**kwargs)
         event = self.request.event
         talk_slots = self.get_talk_slots()
@@ -46,10 +48,30 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         context["talks"] = talk_slots
         context["talks_count"] = len(talk_slots)
 
+        # Pre-populate form with saved event settings or platform environment defaults
+        saved_url = (
+            (event.settings.get("veditor_api_base_url") if hasattr(event, "settings") else None)
+            or os.environ.get("VEDITOR_API_BASE_URL")
+            or "http://localhost:8080"
+        )
+        saved_key = (event.settings.get("veditor_api_key") if hasattr(event, "settings") else None) or os.environ.get("VEDITOR_API_KEY") or ""
+        saved_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
+
+        if "form" not in context:
+            context["form"] = VEditorSettingsForm(
+                initial={
+                    "veditor_api_base_url": saved_url,
+                    "veditor_api_key": saved_key,
+                    "veditor_event_id": saved_event_id or "",
+                }
+            )
+
         try:
-            client = VEditorClient()
+            client = VEditorClient(event=event)
             context["veditor_configured"] = True
             context["veditor_base_url"] = client.base_url
+            raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
+            context["veditor_target_event_id"] = int(raw_event_id or event.id)
         except VEditorConfigError as exc:
             context["veditor_configured"] = False
             context["config_error"] = str(exc)
@@ -57,17 +79,52 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         return context
 
     def post(self, request, *args, **kwargs):
-        """Execute atomic talk synchronization and redirect organizer to VEditor."""
+        """Handle saving settings or executing talk synchronization and redirect."""
         event = request.event
+        action = request.POST.get("action")
+
+        if action == "save_settings":
+            form = VEditorSettingsForm(request.POST)
+            if form.is_valid():
+                if hasattr(event, "settings"):
+                    event.settings.set(
+                        "veditor_api_base_url",
+                        form.cleaned_data["veditor_api_base_url"].rstrip("/"),
+                    )
+                    event.settings.set(
+                        "veditor_api_key",
+                        form.cleaned_data["veditor_api_key"].strip(),
+                    )
+                    event_id_val = form.cleaned_data.get("veditor_event_id")
+                    if event_id_val is not None:
+                        event.settings.set("veditor_event_id", str(event_id_val))
+                    else:
+                        event.settings.set("veditor_event_id", "")
+
+                messages.success(request, _("VEditor connection settings saved successfully."))
+                return redirect(
+                    reverse(
+                        "plugins:veditor:connect",
+                        kwargs={"organizer": event.organizer.slug, "event": event.slug},
+                    )
+                )
+            else:
+                context = self.get_context_data(**kwargs)
+                context["form"] = form
+                return self.render_to_response(context)
+
+        # Default action: sync talks and launch VEditor
         talk_slots = self.get_talk_slots()
+        raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
+        target_event_id = int(raw_event_id or event.id)
 
         try:
-            client = VEditorClient()
+            client = VEditorClient(event=event)
             # 1. Atomic bulk synchronization of talks
-            client.sync_talks(event_id=event.id, talk_slots=talk_slots)
+            client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
 
             # 2. Request scoped SSO JWT for organizer
-            token = client.request_sso_jwt(event_id=event.id, role="organiser")
+            token = client.request_sso_jwt(event_id=target_event_id, role="organiser")
 
             # 3. Redirect browser to VEditor
             redirect_url = f"{client.base_url}/?sso_token={token}"

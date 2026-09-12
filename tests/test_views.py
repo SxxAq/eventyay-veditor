@@ -168,3 +168,60 @@ def test_connect_view_post_network_error_blocks_redirect(event, organizer_user, 
         expected_url = reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug})
         assert response.url == expected_url
         assert not mock_client.request_sso_jwt.called
+
+
+def test_connect_view_post_save_settings(event, organizer_user, rf):
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "save_settings",
+                "veditor_api_base_url": "http://localhost:8080/",
+                "veditor_api_key": "new-secret-key",
+                "veditor_event_id": "99105",
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    view = ConnectView.as_view()
+    with scopes_disabled():
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+    assert response.status_code == 302
+    assert event.settings.get("veditor_api_base_url") == "http://localhost:8080"
+    assert event.settings.get("veditor_api_key") == "new-secret-key"
+    assert event.settings.get("veditor_event_id") == "99105"
+
+
+def test_connect_view_post_with_custom_event_id(event, organizer_user, rf):
+    event.settings.set("veditor_api_base_url", "http://localhost:8080")
+    event.settings.set("veditor_api_key", "valid-key")
+    event.settings.set("veditor_event_id", "99105")
+
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={"action": "sync_and_launch"},
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    with patch("veditor.views.VEditorClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.base_url = "http://localhost:8080"
+        mock_client.sync_talks.return_value = {"status": "ok"}
+        mock_client.request_sso_jwt.return_value = "jwt_token_123"
+
+        view = ConnectView.as_view()
+        with scopes_disabled():
+            response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+        assert response.status_code == 302
+        assert response.url == "http://localhost:8080/?sso_token=jwt_token_123"
+        mock_client.sync_talks.assert_called_once_with(event_id=99105, talk_slots=[])
+        mock_client.request_sso_jwt.assert_called_once_with(event_id=99105, role="organiser")
