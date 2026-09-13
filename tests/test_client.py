@@ -97,6 +97,28 @@ def test_serialize_talks_list():
     assert serialized[1]["event_id"] == "ev-1"
 
 
+def test_serialize_talk_with_string_timestamp_timezone_conversion():
+    dict_talk = {
+        "external_id": "SUB-100",
+        "title": "Timezone Talk",
+        "start": "2026-09-12T15:30:00+05:30",
+        "end": "2026-09-12T16:30:00+05:30",
+    }
+    data = serialize_talk(dict_talk)
+    assert data["start"] == "2026-09-12T10:00:00+00:00"
+    assert data["end"] == "2026-09-12T11:00:00+00:00"
+
+
+def test_serialize_talk_with_invalid_string_timestamp():
+    dict_talk = {
+        "external_id": "SUB-101",
+        "title": "Broken Talk",
+        "start": "not-a-valid-date",
+    }
+    with pytest.raises(ValueError, match="Invalid ISO-8601 timestamp"):
+        serialize_talk(dict_talk)
+
+
 # ============================================================================
 # Client Configuration Unit Tests
 # ============================================================================
@@ -152,6 +174,29 @@ def test_client_init_from_env():
         assert client.timeout == 25.0
 
 
+@pytest.mark.parametrize("invalid_timeout", [0, -5.0, "not-a-number"])
+def test_client_init_invalid_timeout(invalid_timeout):
+    with pytest.raises(VEditorConfigError, match="Invalid timeout"):
+        VEditorClient(
+            base_url="https://editor.example.com",
+            api_key="secret",
+            timeout=invalid_timeout,
+        )
+
+
+def test_client_init_retry_adapter_configured():
+    client = VEditorClient(
+        base_url="https://editor.example.com",
+        api_key="secret",
+    )
+    http_adapter = client.session.adapters.get("http://")
+    https_adapter = client.session.adapters.get("https://")
+    assert http_adapter is not None
+    assert https_adapter is not None
+    assert http_adapter.max_retries.total == 3
+    assert 502 in http_adapter.max_retries.status_forcelist
+
+
 # ============================================================================
 # Client API Request & Endpoint Tests
 # ============================================================================
@@ -195,6 +240,18 @@ def test_sync_talks_bulk_success():
     assert result["status"] == "ok"
     assert result["synced_count"] == 2
     assert "talks" in responses.calls[0].request.body.decode("utf-8")
+
+
+def test_request_disallows_redirects():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    with patch.object(client.session, "request") as mock_request:
+        mock_response = mock_request.return_value
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "ok"}
+        client._request("GET", "/test-endpoint")
+        mock_request.assert_called_once()
+        _, kwargs = mock_request.call_args
+        assert kwargs.get("allow_redirects") is False
 
 
 @responses.activate
@@ -342,3 +399,20 @@ def test_client_connection_error():
 
     with pytest.raises(VEditorNetworkError, match="Failed to connect"):
         client.sync_talk({"external_id": "1"})
+
+
+@responses.activate
+def test_client_non_dict_error_response():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+
+    responses.add(
+        responses.POST,
+        "https://veditor.test/talks",
+        json=["bulk error item 1", "bulk error item 2"],
+        status=400,
+    )
+
+    with pytest.raises(VEditorSyncError) as exc_info:
+        client.sync_talk({"external_id": "1"})
+
+    assert "bulk error item 1" in str(exc_info.value)

@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import requests
 from django.conf import settings
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .exceptions import (
     VEditorAuthError,
@@ -41,13 +43,31 @@ class VEditorClient:
         self.api_key = api_key or _get_conf("VEDITOR_API_KEY") or os.environ.get("VEDITOR_API_KEY")
 
         resolved_timeout = timeout if timeout is not None else _get_conf("VEDITOR_REQUEST_TIMEOUT") or os.environ.get("VEDITOR_REQUEST_TIMEOUT")
-        self.timeout = float(resolved_timeout) if resolved_timeout is not None else self.DEFAULT_TIMEOUT
+        if resolved_timeout is not None:
+            try:
+                self.timeout = float(resolved_timeout)
+            except (ValueError, TypeError) as exc:
+                raise VEditorConfigError(f"Invalid timeout '{resolved_timeout}'. Must be a positive number.") from exc
+            if self.timeout <= 0:
+                raise VEditorConfigError(f"Invalid timeout '{self.timeout}'. Must be strictly greater than 0.")
+        else:
+            self.timeout = self.DEFAULT_TIMEOUT
 
         # 2. Validate configuration
         self._validate_config()
 
-        # 3. Setup persistent session with default auth headers
+        # 3. Setup persistent session with default auth headers and retry strategy
         self.session = session or requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[502, 503, 504],
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
         self.session.headers.update(
             {
                 "X-API-Key": self.api_key,
@@ -78,6 +98,7 @@ class VEditorClient:
         """Execute an HTTP request against the VEditor API and handle exceptions."""
         url = self._build_url(path)
         kwargs.setdefault("timeout", self.timeout)
+        kwargs.setdefault("allow_redirects", False)
 
         try:
             response = self.session.request(method=method, url=url, **kwargs)
@@ -102,7 +123,14 @@ class VEditorClient:
         if 200 <= status < 300:
             return data
 
-        error_message = data.get("detail") or data.get("message") or response.text or f"HTTP {status}"
+        error_message = None
+        if isinstance(data, dict):
+            error_message = data.get("detail") or data.get("message")
+        elif isinstance(data, (list, str)):
+            error_message = str(data)
+
+        if not error_message:
+            error_message = response.text or f"HTTP {status}"
 
         if status in (401, 403):
             raise VEditorAuthError(
@@ -135,7 +163,12 @@ class VEditorClient:
         return self._request("POST", "/talks", json=payload)
 
     def sync_talks(self, event_id: int | str, talk_slots: list[Any]) -> dict[str, Any]:
-        """Atomically upsert talks in bulk for an event."""
+        """Atomically upsert talks in bulk for an event via POST /talks/schedule/import.
+
+        Note:
+            The live VEditor schedule import endpoint matches and upserts talks based on
+            `(event_id, title, start)` and returns `{"status": "ok", "imported_count": N}`.
+        """
         serialized = serialize_talks(talk_slots, event_id=event_id)
         payload = {"event_id": event_id, "talks": serialized}
         return self._request("POST", "/talks/schedule/import", json=payload)

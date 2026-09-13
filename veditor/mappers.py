@@ -61,15 +61,21 @@ def serialize_talk(talk_slot: Any, event_id: str | None = None) -> dict[str, Any
     start_dt = getattr(talk_slot, "start", None) if not isinstance(talk_slot, dict) else talk_slot.get("start")
     end_dt = getattr(talk_slot, "end", None) if not isinstance(talk_slot, dict) else talk_slot.get("end")
 
-    if isinstance(start_dt, str):
-        start_iso = start_dt
-    else:
-        start_iso = to_utc_isoformat(start_dt)
+    def _parse_and_normalize(dt_val: Any) -> str | None:
+        if dt_val is None:
+            return None
+        if isinstance(dt_val, str):
+            try:
+                dt_obj = datetime.fromisoformat(dt_val)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"Invalid ISO-8601 timestamp '{dt_val}': {exc}") from exc
+            return to_utc_isoformat(dt_obj)
+        if isinstance(dt_val, datetime):
+            return to_utc_isoformat(dt_val)
+        return str(dt_val)
 
-    if isinstance(end_dt, str):
-        end_iso = end_dt
-    else:
-        end_iso = to_utc_isoformat(end_dt)
+    start_iso = _parse_and_normalize(start_dt)
+    end_iso = _parse_and_normalize(end_dt)
 
     # 5. Resolve event_id
     resolved_event_id = event_id
