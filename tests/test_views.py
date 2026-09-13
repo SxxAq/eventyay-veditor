@@ -122,7 +122,7 @@ def test_connect_view_post_success(event, organizer_user, rf):
             response = view(request, organizer=event.organizer.slug, event=event.slug)
 
         assert response.status_code == 302
-        assert response.url == "https://editor.example.com/?sso_token=mock_signed_jwt_token"
+        assert response.url == f"https://editor.example.com/studio?event_id={event.id}&sso_token=mock_signed_jwt_token"
         assert mock_client.sync_talks.called
         assert mock_client.request_sso_jwt.called
 
@@ -222,6 +222,6 @@ def test_connect_view_post_with_custom_event_id(event, organizer_user, rf):
             response = view(request, organizer=event.organizer.slug, event=event.slug)
 
         assert response.status_code == 302
-        assert response.url == "http://localhost:8080/?sso_token=jwt_token_123"
+        assert response.url == "http://localhost:8080/studio?event_id=99105&sso_token=jwt_token_123"
         mock_client.sync_talks.assert_called_once_with(event_id=99105, talk_slots=[])
         mock_client.request_sso_jwt.assert_called_once_with(event_id=99105, role="organiser")

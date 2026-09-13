@@ -27,16 +27,36 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
     template_name = "veditor/connect.html"
 
     def get_talk_slots(self) -> list[TalkSlot]:
-        """Fetch all scheduled and confirmed talk slots for the current event."""
+        """Fetch all scheduled and confirmed talk slots for the current active schedule."""
         with scopes_disabled():
-            return list(
-                TalkSlot.objects.filter(
-                    schedule__event=self.request.event,
-                    submission__isnull=False,
+            event = self.request.event
+            schedule = getattr(event, "current_schedule", None) or getattr(event, "wip_schedule", None)
+
+            if schedule:
+                if hasattr(schedule, "scheduled_talks"):
+                    slots = list(schedule.scheduled_talks)
+                else:
+                    slots = list(schedule.talks.filter(submission__isnull=False).select_related("submission", "room").order_by("start"))
+            else:
+                slots = list(
+                    TalkSlot.objects.filter(
+                        schedule__event=event,
+                        submission__isnull=False,
+                    )
+                    .select_related("submission", "room")
+                    .order_by("start")
                 )
-                .select_related("submission", "room")
-                .order_by("start")
-            )
+
+            # Deduplicate by submission_id to avoid multiples across schedule revisions
+            seen_submissions = set()
+            unique_slots = []
+            for slot in slots:
+                sub_id = getattr(slot, "submission_id", None) or getattr(slot, "id", None)
+                if sub_id not in seen_submissions:
+                    seen_submissions.add(sub_id)
+                    unique_slots.append(slot)
+
+            return unique_slots
 
     def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
         """Populate template context with event details, talk counts, and settings form."""
@@ -123,11 +143,17 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             # 1. Atomic bulk synchronization of talks
             client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
 
-            # 2. Request scoped SSO JWT for organizer
-            token = client.request_sso_jwt(event_id=target_event_id, role="organiser")
+            # 2. Request scoped SSO JWT for organizer, falling back to direct studio link if endpoint is 404
+            try:
+                token = client.request_sso_jwt(event_id=target_event_id, role="organiser")
+                redirect_url = f"{client.base_url}/studio?event_id={target_event_id}&sso_token={token}"
+            except VEditorError as sso_exc:
+                if sso_exc.status_code == 404:
+                    redirect_url = f"{client.base_url}/studio?api_key={client.api_key}&event_id={target_event_id}"
+                else:
+                    raise
 
             # 3. Redirect browser to VEditor
-            redirect_url = f"{client.base_url}/?sso_token={token}"
             return HttpResponseRedirect(redirect_url)
 
         except (VEditorError, ValueError) as exc:
