@@ -161,12 +161,5 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                 request,
                 _("Failed to synchronize talks with VEditor: {error}").format(error=str(exc)),
             )
-            return redirect(
-                reverse(
-                    "plugins:veditor:connect",
-                    kwargs={
-                        "organizer": event.organizer.slug,
-                        "event": event.slug,
-                    },
-                )
-            )
+            context = self.get_context_data(**kwargs)
+            return self.render_to_response(context)
