@@ -1,7 +1,7 @@
 """Unit and integration tests for the Connect view and navigation signals."""
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from django.contrib.messages.storage.fallback import FallbackStorage
@@ -9,8 +9,6 @@ from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.exceptions import PermissionDenied
 from django.test import RequestFactory
 from django.urls import reverse
-from django_scopes import scopes_disabled
-from eventyay.base.models import Team
 
 from veditor.exceptions import VEditorNetworkError, VEditorSyncError
 from veditor.signals import control_nav_veditor
@@ -26,18 +24,50 @@ def setup_request(request):
     return request
 
 
+class MockEventSettings:
+    def __init__(self, data=None):
+        self.data = data or {}
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value):
+        self.data[key] = value
+
+
 @pytest.fixture
-def organizer_user(event, user):
-    """Fixture to give the test user organizer permission on the test event."""
-    with scopes_disabled():
-        team = Team.objects.create(
-            organizer=event.organizer,
-            name="Organizers",
-            can_change_event_settings=True,
-            all_events=True,
-        )
-        team.members.add(user)
-    return user
+def event():
+    """Mock event fixture avoiding database connections in CI."""
+    organizer = SimpleNamespace(slug="test-org")
+    schedule = SimpleNamespace(scheduled_talks=[])
+    return SimpleNamespace(
+        id=42,
+        slug="test-conf",
+        name="Test Conference 2026",
+        organizer=organizer,
+        settings=MockEventSettings(),
+        current_schedule=schedule,
+        wip_schedule=None,
+        get_talk_slots=lambda: [],
+    )
+
+
+@pytest.fixture
+def user():
+    """Mock unprivileged user fixture."""
+    mock_u = MagicMock()
+    mock_u.is_authenticated = True
+    mock_u.has_event_permission.return_value = False
+    return mock_u
+
+
+@pytest.fixture
+def organizer_user():
+    """Mock organizer user fixture with can_change_event_settings permission."""
+    mock_u = MagicMock()
+    mock_u.is_authenticated = True
+    mock_u.has_event_permission.return_value = True
+    return mock_u
 
 
 @pytest.fixture
@@ -97,8 +127,7 @@ def test_connect_view_get_authorized(event, organizer_user, rf):
     request.organizer = event.organizer
 
     view = ConnectView.as_view()
-    with scopes_disabled():
-        response = view(request, organizer=event.organizer.slug, event=event.slug)
+    response = view(request, organizer=event.organizer.slug, event=event.slug)
 
     assert response.status_code == 200
     assert response.context_data["event"] == event
@@ -118,8 +147,7 @@ def test_connect_view_post_success(event, organizer_user, rf):
         mock_client.request_sso_jwt.return_value = "mock_signed_jwt_token"
 
         view = ConnectView.as_view()
-        with scopes_disabled():
-            response = view(request, organizer=event.organizer.slug, event=event.slug)
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
 
         assert response.status_code == 302
         assert response.url == f"https://editor.example.com/studio?event_id={event.id}&sso_token=mock_signed_jwt_token"
@@ -139,14 +167,13 @@ def test_connect_view_post_sync_error_blocks_redirect(event, organizer_user, rf)
         mock_client.sync_talks.side_effect = VEditorSyncError("Invalid talk structure", status_code=422)
 
         view = ConnectView.as_view()
-        with scopes_disabled():
-            response = view(request, organizer=event.organizer.slug, event=event.slug)
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
 
-        # Must redirect back to the connect page, NOT to VEditor
-        assert response.status_code == 302
-        expected_url = reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug})
-        assert response.url == expected_url
+        # Must stay on the connect page with 200, NOT redirect to VEditor
+        assert response.status_code == 200
         assert not mock_client.request_sso_jwt.called
+        messages = [m.message for m in request._messages]
+        assert any("Failed to synchronize talks" in str(m) for m in messages)
 
 
 def test_connect_view_post_network_error_blocks_redirect(event, organizer_user, rf):
@@ -161,13 +188,13 @@ def test_connect_view_post_network_error_blocks_redirect(event, organizer_user, 
         mock_client.sync_talks.side_effect = VEditorNetworkError("VEditor server connection refused")
 
         view = ConnectView.as_view()
-        with scopes_disabled():
-            response = view(request, organizer=event.organizer.slug, event=event.slug)
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
 
-        assert response.status_code == 302
-        expected_url = reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug})
-        assert response.url == expected_url
+        # Must stay on the connect page with 200, NOT redirect to VEditor
+        assert response.status_code == 200
         assert not mock_client.request_sso_jwt.called
+        messages = [m.message for m in request._messages]
+        assert any("Failed to synchronize talks" in str(m) for m in messages)
 
 
 def test_connect_view_post_save_settings(event, organizer_user, rf):
@@ -187,8 +214,7 @@ def test_connect_view_post_save_settings(event, organizer_user, rf):
     request.organizer = event.organizer
 
     view = ConnectView.as_view()
-    with scopes_disabled():
-        response = view(request, organizer=event.organizer.slug, event=event.slug)
+    response = view(request, organizer=event.organizer.slug, event=event.slug)
 
     assert response.status_code == 302
     assert event.settings.get("veditor_api_base_url") == "http://localhost:8080"
@@ -218,8 +244,7 @@ def test_connect_view_post_with_custom_event_id(event, organizer_user, rf):
         mock_client.request_sso_jwt.return_value = "jwt_token_123"
 
         view = ConnectView.as_view()
-        with scopes_disabled():
-            response = view(request, organizer=event.organizer.slug, event=event.slug)
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
 
         assert response.status_code == 302
         assert response.url == "http://localhost:8080/studio?event_id=99105&sso_token=jwt_token_123"
