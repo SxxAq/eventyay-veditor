@@ -119,6 +119,19 @@ def test_serialize_talk_with_invalid_string_timestamp():
         serialize_talk(dict_talk)
 
 
+def test_serialize_talks_deduplication():
+    # Duplicate talk slot representations from multiple schedule versions
+    slots = [
+        {"external_id": "1", "title": "Keynote", "start": "2026-06-01T10:00:00Z"},
+        {"external_id": "1", "title": "Keynote", "start": "2026-06-01T10:00:00Z"},
+        {"external_id": "2", "title": "Workshop", "start": "2026-06-01T11:00:00Z"},
+    ]
+    serialized = serialize_talks(slots, event_id="1")
+    assert len(serialized) == 2
+    assert serialized[0]["title"] == "Keynote"
+    assert serialized[1]["title"] == "Workshop"
+
+
 # ============================================================================
 # Client Configuration Unit Tests
 # ============================================================================
@@ -217,6 +230,8 @@ def test_client_init_from_event_settings():
         client = VEditorClient(event=mock_event)
         assert client.base_url == "https://veditor.eventyay.com"
         assert client.api_key == "event-specific-key"
+
+
 # ============================================================================
 # Client API Request & Endpoint Tests
 # ============================================================================
