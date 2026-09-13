@@ -143,15 +143,9 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             # 1. Atomic bulk synchronization of talks
             client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
 
-            # 2. Request scoped SSO JWT for organizer, falling back to direct studio link if endpoint is 404
-            try:
-                token = client.request_sso_jwt(event_id=target_event_id, role="organiser")
-                redirect_url = f"{client.base_url}/studio?event_id={target_event_id}&sso_token={token}"
-            except VEditorError as sso_exc:
-                if sso_exc.status_code == 404:
-                    redirect_url = f"{client.base_url}/studio?api_key={client.api_key}&event_id={target_event_id}"
-                else:
-                    raise
+            # 2. Request scoped SSO JWT for organizer
+            token = client.request_sso_jwt(event_id=target_event_id, role="organiser")
+            redirect_url = f"{client.base_url}/studio?event_id={target_event_id}&sso_token={token}"
 
             # 3. Redirect browser to VEditor
             return HttpResponseRedirect(redirect_url)
