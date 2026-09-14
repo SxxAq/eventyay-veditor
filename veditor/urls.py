@@ -14,11 +14,3 @@ urlpatterns = [
         name="connect",
     ),
 ]
-
-event_patterns = [
-    path(
-        "veditor/",
-        views.ConnectView.as_view(),
-        name="connect",
-    ),
-]

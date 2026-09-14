@@ -250,3 +250,75 @@ def test_connect_view_post_with_custom_event_id(event, organizer_user, rf):
         assert response.url == "http://localhost:8080/studio?event_id=99105&sso_token=jwt_token_123"
         mock_client.sync_talks.assert_called_once_with(event_id=99105, talk_slots=[])
         mock_client.request_sso_jwt.assert_called_once_with(event_id=99105, role="organiser")
+
+
+# ============================================================================
+# Schedule Scoping & Talk Slots Resolution Tests
+# ============================================================================
+
+
+def test_talk_slots_published_schedule(event):
+    view = ConnectView()
+    slot1 = SimpleNamespace(id=1, submission_id=101)
+    slot2 = SimpleNamespace(id=2, submission_id=102)
+    event.current_schedule = SimpleNamespace(scheduled_talks=[slot1, slot2])
+    view.request = SimpleNamespace(event=event)
+
+    slots = view.get_talk_slots()
+    assert slots == [slot1, slot2]
+
+
+def test_talk_slots_wip_schedule_fallback(event):
+    view = ConnectView()
+    event.current_schedule = None
+    slot = SimpleNamespace(id=3, submission_id=103)
+    mock_talks = MagicMock()
+    mock_talks.filter.return_value.select_related.return_value.order_by.return_value = [slot]
+    event.wip_schedule = SimpleNamespace(talks=mock_talks)
+    view.request = SimpleNamespace(event=event)
+
+    slots = view.get_talk_slots()
+    assert slots == [slot]
+
+
+def test_talk_slots_no_schedule(event):
+    view = ConnectView()
+    event.current_schedule = None
+    event.wip_schedule = None
+    view.request = SimpleNamespace(event=event)
+
+    slots = view.get_talk_slots()
+    assert slots == []
+
+
+# ============================================================================
+# URL Structure & Form Validation Tests
+# ============================================================================
+
+
+def test_urls_has_no_event_patterns():
+    import veditor.urls
+
+    assert not hasattr(veditor.urls, "event_patterns")
+
+
+def test_form_url_validation():
+    from veditor.forms import VEditorSettingsForm
+
+    # Valid HTTPS
+    form = VEditorSettingsForm(data={"veditor_api_base_url": "https://editor.example.com", "veditor_api_key": "key"})
+    assert form.is_valid()
+    assert form.cleaned_data["veditor_api_base_url"] == "https://editor.example.com"
+
+    # Valid loopback HTTP (localhost, 127.0.0.1)
+    form_lh = VEditorSettingsForm(data={"veditor_api_base_url": "http://localhost:8080/", "veditor_api_key": "key"})
+    assert form_lh.is_valid()
+    assert form_lh.cleaned_data["veditor_api_base_url"] == "http://localhost:8080"
+
+    form_ip = VEditorSettingsForm(data={"veditor_api_base_url": "http://127.0.0.1:8080", "veditor_api_key": "key"})
+    assert form_ip.is_valid()
+
+    # Insecure non-loopback HTTP rejected
+    form_insecure = VEditorSettingsForm(data={"veditor_api_base_url": "http://insecure.example.com", "veditor_api_key": "key"})
+    assert not form_insecure.is_valid()
+    assert "veditor_api_base_url" in form_insecure.errors

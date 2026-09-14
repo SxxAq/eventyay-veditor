@@ -43,6 +43,11 @@ class VEditorSettingsForm(forms.Form):
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise forms.ValidationError(_("Invalid URL. Must begin with http:// or https://."))
 
+        hostname = (parsed.hostname or "").lower()
+        is_loopback = hostname in ("localhost", "127.0.0.1", "::1")
+        if parsed.scheme == "http" and not is_loopback:
+            raise forms.ValidationError(_("Insecure HTTP is only permitted for local development (localhost/127.0.0.1). Production URLs must use HTTPS."))
+
         allowed = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", None)
         if allowed:
             origin = f"{parsed.scheme}://{parsed.netloc}"

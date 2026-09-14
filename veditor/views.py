@@ -11,7 +11,6 @@ from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import TemplateView
-from django_scopes import scopes_disabled
 from eventyay.base.models import TalkSlot
 from eventyay.control.permissions import EventPermissionRequiredMixin
 
@@ -28,35 +27,27 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
     def get_talk_slots(self) -> list[TalkSlot]:
         """Fetch all scheduled and confirmed talk slots for the current active schedule."""
-        with scopes_disabled():
-            event = self.request.event
-            schedule = getattr(event, "current_schedule", None) or getattr(event, "wip_schedule", None)
+        event = self.request.event
+        schedule = getattr(event, "current_schedule", None) or getattr(event, "wip_schedule", None)
 
-            if schedule:
-                if hasattr(schedule, "scheduled_talks"):
-                    slots = list(schedule.scheduled_talks)
-                else:
-                    slots = list(schedule.talks.filter(submission__isnull=False).select_related("submission", "room").order_by("start"))
-            else:
-                slots = list(
-                    TalkSlot.objects.filter(
-                        schedule__event=event,
-                        submission__isnull=False,
-                    )
-                    .select_related("submission", "room")
-                    .order_by("start")
-                )
+        if not schedule:
+            return []
 
-            # Deduplicate by submission_id to avoid multiples across schedule revisions
-            seen_submissions = set()
-            unique_slots = []
-            for slot in slots:
-                sub_id = getattr(slot, "submission_id", None) or getattr(slot, "id", None)
-                if sub_id not in seen_submissions:
-                    seen_submissions.add(sub_id)
-                    unique_slots.append(slot)
+        if hasattr(schedule, "scheduled_talks"):
+            slots = list(schedule.scheduled_talks)
+        else:
+            slots = list(schedule.talks.filter(submission__isnull=False).select_related("submission", "room").order_by("start"))
 
-            return unique_slots
+        # Deduplicate by submission_id to avoid multiples across schedule revisions
+        seen_submissions = set()
+        unique_slots = []
+        for slot in slots:
+            sub_id = getattr(slot, "submission_id", None) or getattr(slot, "id", None)
+            if sub_id not in seen_submissions:
+                seen_submissions.add(sub_id)
+                unique_slots.append(slot)
+
+        return unique_slots
 
     def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
         """Populate template context with event details, talk counts, and settings form."""
