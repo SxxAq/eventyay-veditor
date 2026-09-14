@@ -155,6 +155,29 @@ def test_connect_view_post_success(event, organizer_user, rf):
         assert mock_client.request_sso_jwt.called
 
 
+def test_connect_view_post_success_platform_mode(event, organizer_user, rf, monkeypatch):
+    """When VEDITOR_API_KEY is configured in env, platform mode binds to event.slug with source='eventyay'."""
+    monkeypatch.setenv("VEDITOR_API_KEY", "platform-secret-key")
+    request = setup_request(rf.post(reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug})))
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    with patch("veditor.views.VEditorClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.base_url = "https://editor.example.com"
+        mock_client.sync_talks.return_value = {"status": "ok", "imported_count": 0}
+        mock_client.request_sso_jwt.return_value = "mock_signed_jwt_token"
+
+        view = ConnectView.as_view()
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+        assert response.status_code == 302
+        assert response.url == f"https://editor.example.com/studio?event_id={event.slug}&sso_token=mock_signed_jwt_token"
+        mock_client.sync_talks.assert_called_once_with(event_id=event.slug, talk_slots=[], source="eventyay")
+        mock_client.request_sso_jwt.assert_called_once_with(event_id=event.slug, role="organiser")
+
+
 def test_connect_view_post_sync_error_blocks_redirect(event, organizer_user, rf):
     request = setup_request(rf.post(reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug})))
     request.user = organizer_user

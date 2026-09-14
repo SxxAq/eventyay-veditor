@@ -28,7 +28,17 @@
                     {% endblocktrans %}
                 </p>
 
-                {% if veditor_configured %}
+                {% if is_platform_mode %}
+                    <div class="alert alert-success" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <div>
+                            <i class="fa fa-shield"></i>
+                            <strong>{% trans "Eventyay Platform Integration" %}:</strong>
+                            {% trans "Connected to" %} <code>{{ veditor_base_url }}</code>.
+                            &nbsp;&bull;&nbsp;<strong>{% trans "Event Slug" %}:</strong> <code>{{ veditor_target_identifier }}</code>
+                        </div>
+                        <span class="label label-success"><i class="fa fa-check"></i> {% trans "Auto-Configured" %}</span>
+                    </div>
+                {% elif veditor_configured %}
                     <div class="alert alert-info" style="display: flex; justify-content: space-between; align-items: center;">
                         <div>
                             <i class="fa fa-check-circle"></i>

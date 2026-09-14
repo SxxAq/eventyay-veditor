@@ -167,21 +167,29 @@ class VEditorClient:
         payload = serialize_talk(talk_slot, event_id=event_id)
         return self._request("POST", "/talks", json=payload)
 
-    def sync_talks(self, event_id: int | str, talk_slots: list[Any]) -> dict[str, Any]:
+    def sync_talks(
+        self,
+        event_id: int | str,
+        talk_slots: list[Any],
+        source: str | None = None,
+    ) -> dict[str, Any]:
         """Atomically upsert talks in bulk for an event via POST /talks/schedule/import.
 
         Note:
             The live VEditor schedule import endpoint matches and upserts talks based on
-            `(event_id, title, start)` and returns `{"status": "ok", "imported_count": N}`.
+            `(event_id, title, start)` or `(event_id, external_id)` and returns
+            `{"status": "ok", "imported_count": N}`.
         """
         serialized = serialize_talks(talk_slots, event_id=event_id)
         payload = {"event_id": event_id, "talks": serialized}
+        if source:
+            payload["source"] = source
         return self._request("POST", "/talks/schedule/import", json=payload)
 
     def request_sso_jwt(
         self,
-        event_id: str,
-        talk_id: str | None = None,
+        event_id: int | str,
+        talk_id: int | str | None = None,
         role: str = "organiser",
     ) -> str:
         """Request a scoped SSO JWT token for browser handoff or speaker review."""

@@ -20,6 +20,15 @@ from .exceptions import VEditorConfigError, VEditorError
 from .forms import VEditorSettingsForm
 
 
+def is_platform_mode() -> bool:
+    """Check if the plugin is running with a global platform API key."""
+    from django.conf import settings
+
+    if getattr(settings, "configured", False) and getattr(settings, "VEDITOR_API_KEY", None):
+        return True
+    return bool(os.environ.get("VEDITOR_API_KEY"))
+
+
 class ConnectView(EventPermissionRequiredMixin, TemplateView):
     """View to view event sync status and launch VEditor with single-click SSO."""
 
@@ -63,10 +72,12 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         event = self.request.event
         talk_slots = self.get_talk_slots()
+        platform_mode = is_platform_mode()
 
         context["event"] = event
         context["talks"] = talk_slots
         context["talks_count"] = len(talk_slots)
+        context["is_platform_mode"] = platform_mode
 
         # Pre-populate form with saved event settings or platform environment defaults
         saved_url = (
@@ -90,8 +101,11 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             client = VEditorClient(event=event)
             context["veditor_configured"] = True
             context["veditor_base_url"] = client.base_url
-            raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
-            context["veditor_target_event_id"] = int(raw_event_id or event.id)
+            if platform_mode:
+                context["veditor_target_identifier"] = event.slug
+            else:
+                raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
+                context["veditor_target_event_id"] = int(raw_event_id or event.id)
         except VEditorConfigError as exc:
             context["veditor_configured"] = False
             context["config_error"] = str(exc)
@@ -102,6 +116,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         """Handle saving settings or executing talk synchronization and redirect."""
         event = request.event
         action = request.POST.get("action")
+        platform_mode = is_platform_mode()
 
         if action == "save_settings":
             form = VEditorSettingsForm(request.POST)
@@ -135,17 +150,22 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
         # Default action: sync talks and launch VEditor
         talk_slots = self.get_talk_slots()
-        raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
-        target_event_id = int(raw_event_id or event.id)
+        if platform_mode:
+            target_identifier = event.slug
+            source = "eventyay"
+        else:
+            raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
+            target_identifier = int(raw_event_id or event.id)
+            source = None
 
         try:
             client = VEditorClient(event=event)
             # 1. Atomic bulk synchronization of talks
-            client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
+            client.sync_talks(event_id=target_identifier, talk_slots=talk_slots, source=source)
 
             # 2. Request scoped SSO JWT for organizer
-            token = client.request_sso_jwt(event_id=target_event_id, role="organiser")
-            redirect_url = f"{client.base_url}/studio?event_id={target_event_id}&sso_token={token}"
+            token = client.request_sso_jwt(event_id=target_identifier, role="organiser")
+            redirect_url = f"{client.base_url}/studio?event_id={target_identifier}&sso_token={token}"
 
             # 3. Redirect browser to VEditor
             return HttpResponseRedirect(redirect_url)

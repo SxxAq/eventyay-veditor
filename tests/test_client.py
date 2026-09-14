@@ -277,6 +277,26 @@ def test_sync_talks_bulk_success():
     assert "talks" in responses.calls[0].request.body.decode("utf-8")
 
 
+@responses.activate
+def test_sync_talks_with_source():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+
+    responses.add(
+        responses.POST,
+        "https://veditor.test/talks/schedule/import",
+        json={"status": "ok", "imported_count": 1},
+        status=200,
+    )
+
+    slots = [{"external_id": "T1", "title": "Talk 1"}]
+    result = client.sync_talks("fossasia-2026", slots, source="eventyay")
+
+    assert result["status"] == "ok"
+    body = responses.calls[0].request.body.decode("utf-8")
+    assert '"source": "eventyay"' in body
+    assert '"event_id": "fossasia-2026"' in body
+
+
 def test_request_disallows_redirects():
     client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
     with patch.object(client.session, "request") as mock_request:
