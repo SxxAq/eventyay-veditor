@@ -165,7 +165,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
             # 2. Request scoped SSO JWT for organizer
             token = client.request_sso_jwt(event_id=target_identifier, role="organiser")
-            redirect_url = f"{client.base_url}/studio?event_id={target_identifier}&sso_token={token}"
+            redirect_url = f"{client.base_url}/studio?sso_token={token}"
 
             # 3. Redirect browser to VEditor
             return HttpResponseRedirect(redirect_url)
