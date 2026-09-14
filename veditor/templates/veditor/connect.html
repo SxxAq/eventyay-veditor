@@ -28,76 +28,78 @@
                     {% endblocktrans %}
                 </p>
 
-                {% if is_platform_mode %}
-                    <div class="alert alert-success" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                        <div>
-                            <i class="fa fa-shield"></i>
-                            <strong>{% trans "Eventyay Platform Integration" %}:</strong>
-                            {% trans "Connected to" %} <code>{{ veditor_base_url }}</code>.
-                            &nbsp;&bull;&nbsp;<strong>{% trans "Event Slug" %}:</strong> <code>{{ veditor_target_identifier }}</code>
+                {% if is_platform_mode or veditor_configured %}
+                    {% if is_platform_mode %}
+                        <div class="alert alert-success" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <div>
+                                <i class="fa fa-shield"></i>
+                                <strong>{% trans "Eventyay Platform Integration" %}:</strong>
+                                {% trans "Connected to" %} <code>{{ veditor_base_url }}</code>.
+                                &nbsp;&bull;&nbsp;<strong>{% trans "Event Slug" %}:</strong> <code>{{ veditor_target_identifier }}</code>
+                            </div>
+                            <span class="label label-success"><i class="fa fa-check"></i> {% trans "Auto-Configured" %}</span>
                         </div>
-                        <span class="label label-success"><i class="fa fa-check"></i> {% trans "Auto-Configured" %}</span>
-                    </div>
-                {% elif veditor_configured %}
-                    <div class="alert alert-info" style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <i class="fa fa-check-circle"></i>
-                            <strong>{% trans "VEditor Service" %}:</strong> <code>{{ veditor_base_url }}</code>
-                            {% if veditor_target_event_id %}
-                                &nbsp;&bull;&nbsp;<strong>{% trans "Event ID" %}:</strong> <code>{{ veditor_target_event_id }}</code>
-                            {% endif %}
+                    {% else %}
+                        <div class="alert alert-info" style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <i class="fa fa-check-circle"></i>
+                                <strong>{% trans "VEditor Service" %}:</strong> <code>{{ veditor_base_url }}</code>
+                                {% if veditor_target_event_id %}
+                                    &nbsp;&bull;&nbsp;<strong>{% trans "Event ID" %}:</strong> <code>{{ veditor_target_event_id }}</code>
+                                {% endif %}
+                            </div>
+                            <button class="btn btn-default btn-xs" type="button" data-toggle="collapse" data-target="#settingsCollapse" aria-expanded="false" aria-controls="settingsCollapse">
+                                <i class="fa fa-cog"></i> {% trans "Edit Settings" %}
+                            </button>
                         </div>
-                        <button class="btn btn-default btn-xs" type="button" data-toggle="collapse" data-target="#settingsCollapse" aria-expanded="false" aria-controls="settingsCollapse">
-                            <i class="fa fa-cog"></i> {% trans "Edit Settings" %}
-                        </button>
-                    </div>
 
-                    <div class="collapse" id="settingsCollapse" style="margin-bottom: 20px;">
-                        <div class="panel panel-default">
-                            <div class="panel-heading">
-                                <h4 class="panel-title"><i class="fa fa-sliders"></i> {% trans "Connection Settings" %}</h4>
-                            </div>
-                            <div class="panel-body">
-                                <form method="post" action="">
-                                    {% csrf_token %}
-                                    <input type="hidden" name="action" value="save_settings">
-                                    <div class="form-group {% if form.veditor_api_base_url.errors %}has-error{% endif %}">
-                                        <label for="{{ form.veditor_api_base_url.id_for_label }}">{{ form.veditor_api_base_url.label }}</label>
-                                        {{ form.veditor_api_base_url }}
-                                        {% if form.veditor_api_base_url.help_text %}
-                                            <span class="help-block">{{ form.veditor_api_base_url.help_text }}</span>
-                                        {% endif %}
-                                        {% for error in form.veditor_api_base_url.errors %}
-                                            <span class="help-block text-danger">{{ error }}</span>
-                                        {% endfor %}
-                                    </div>
-                                    <div class="form-group {% if form.veditor_api_key.errors %}has-error{% endif %}">
-                                        <label for="{{ form.veditor_api_key.id_for_label }}">{{ form.veditor_api_key.label }}</label>
-                                        {{ form.veditor_api_key }}
-                                        {% if form.veditor_api_key.help_text %}
-                                            <span class="help-block">{{ form.veditor_api_key.help_text }}</span>
-                                        {% endif %}
-                                        {% for error in form.veditor_api_key.errors %}
-                                            <span class="help-block text-danger">{{ error }}</span>
-                                        {% endfor %}
-                                    </div>
-                                    <div class="form-group {% if form.veditor_event_id.errors %}has-error{% endif %}">
-                                        <label for="{{ form.veditor_event_id.id_for_label }}">{{ form.veditor_event_id.label }}</label>
-                                        {{ form.veditor_event_id }}
-                                        {% if form.veditor_event_id.help_text %}
-                                            <span class="help-block">{{ form.veditor_event_id.help_text }}</span>
-                                        {% endif %}
-                                        {% for error in form.veditor_event_id.errors %}
-                                            <span class="help-block text-danger">{{ error }}</span>
-                                        {% endfor %}
-                                    </div>
-                                    <button type="submit" class="btn btn-primary" id="btn-save-settings">
-                                        <i class="fa fa-save"></i> {% trans "Save Settings" %}
-                                    </button>
-                                </form>
+                        <div class="collapse" id="settingsCollapse" style="margin-bottom: 20px;">
+                            <div class="panel panel-default">
+                                <div class="panel-heading">
+                                    <h4 class="panel-title"><i class="fa fa-sliders"></i> {% trans "Connection Settings" %}</h4>
+                                </div>
+                                <div class="panel-body">
+                                    <form method="post" action="">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="action" value="save_settings">
+                                        <div class="form-group {% if form.veditor_api_base_url.errors %}has-error{% endif %}">
+                                            <label for="{{ form.veditor_api_base_url.id_for_label }}">{{ form.veditor_api_base_url.label }}</label>
+                                            {{ form.veditor_api_base_url }}
+                                            {% if form.veditor_api_base_url.help_text %}
+                                                <span class="help-block">{{ form.veditor_api_base_url.help_text }}</span>
+                                            {% endif %}
+                                            {% for error in form.veditor_api_base_url.errors %}
+                                                <span class="help-block text-danger">{{ error }}</span>
+                                            {% endfor %}
+                                        </div>
+                                        <div class="form-group {% if form.veditor_api_key.errors %}has-error{% endif %}">
+                                            <label for="{{ form.veditor_api_key.id_for_label }}">{{ form.veditor_api_key.label }}</label>
+                                            {{ form.veditor_api_key }}
+                                            {% if form.veditor_api_key.help_text %}
+                                                <span class="help-block">{{ form.veditor_api_key.help_text }}</span>
+                                            {% endif %}
+                                            {% for error in form.veditor_api_key.errors %}
+                                                <span class="help-block text-danger">{{ error }}</span>
+                                            {% endfor %}
+                                        </div>
+                                        <div class="form-group {% if form.veditor_event_id.errors %}has-error{% endif %}">
+                                            <label for="{{ form.veditor_event_id.id_for_label }}">{{ form.veditor_event_id.label }}</label>
+                                            {{ form.veditor_event_id }}
+                                            {% if form.veditor_event_id.help_text %}
+                                                <span class="help-block">{{ form.veditor_event_id.help_text }}</span>
+                                            {% endif %}
+                                            {% for error in form.veditor_event_id.errors %}
+                                                <span class="help-block text-danger">{{ error }}</span>
+                                            {% endfor %}
+                                        </div>
+                                        <button type="submit" class="btn btn-primary" id="btn-save-settings">
+                                            <i class="fa fa-save"></i> {% trans "Save Settings" %}
+                                        </button>
+                                    </form>
+                                </div>
                             </div>
                         </div>
-                    </div>
+                    {% endif %}
 
                     <div class="well">
                         <h4>{% trans "Schedule Synchronization" %}</h4>
