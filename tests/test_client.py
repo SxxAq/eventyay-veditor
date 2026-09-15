@@ -305,6 +305,26 @@ def test_request_sso_jwt_organiser():
 
 
 @responses.activate
+def test_request_sso_jwt_reviewer():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+
+    responses.add(
+        responses.POST,
+        "https://veditor.test/events/fossasia-2026/sso-token",
+        json={"token": "dummy_reviewer_jwt"},
+        status=200,
+    )
+
+    token = client.request_sso_jwt(
+        event_id="fossasia-2026",
+        role="reviewer",
+        email="reviewer@example.org",
+        display_name="QA Reviewer",
+    )
+    assert token == "dummy_reviewer_jwt"
+
+
+@responses.activate
 def test_request_sso_jwt_speaker():
     client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
 

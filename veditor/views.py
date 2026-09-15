@@ -134,8 +134,20 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             # 1. Atomic bulk synchronization of talks
             client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
 
-            # 2. Request scoped SSO JWT for organizer
-            token = client.request_sso_jwt(event_id=target_event_id, role="organiser")
+            # 2. Request scoped SSO JWT for organizer with user identity
+            user_email = getattr(request.user, "email", None) if getattr(request, "user", None) and request.user.is_authenticated else None
+            display_name = None
+            if getattr(request, "user", None) and request.user.is_authenticated:
+                display_name = getattr(request.user, "fullname", None) or getattr(request.user, "name", None)
+                if not display_name and hasattr(request.user, "get_display_name"):
+                    display_name = request.user.get_display_name()
+
+            token = client.request_sso_jwt(
+                event_id=target_event_id,
+                role="organizer",
+                email=user_email,
+                display_name=display_name,
+            )
             redirect_url = f"{client.base_url}/studio?event_id={target_event_id}&sso_token={token}"
 
             # 3. Redirect browser to VEditor

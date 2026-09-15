@@ -182,19 +182,27 @@ class VEditorClient:
         self,
         event_id: str,
         talk_id: str | None = None,
-        role: str = "organiser",
+        role: str = "organizer",
+        email: str | None = None,
+        display_name: str | None = None,
     ) -> str:
-        """Request a scoped SSO JWT token for browser handoff or speaker review."""
-        if role == "organiser":
+        """Request a scoped SSO JWT token for browser handoff, reviewer QA, or speaker review."""
+        normalized_role = "organizer" if role in ("organiser", "organizer") else role
+        if normalized_role in ("organizer", "reviewer"):
             endpoint = f"/events/{event_id}/sso-token"
-            payload = {"role": "organiser"}
-        elif role == "speaker":
+            payload = {"role": normalized_role}
+        elif normalized_role == "speaker":
             if not talk_id:
                 raise ValueError("talk_id is required when requesting a speaker SSO token")
             endpoint = f"/talks/{talk_id}/sso-token"
             payload = {"role": "speaker"}
         else:
-            raise ValueError(f"Unsupported role '{role}'. Allowed roles are 'organiser' and 'speaker'.")
+            raise ValueError(f"Unsupported role '{role}'. Allowed roles are 'organizer', 'reviewer', and 'speaker'.")
+
+        if email:
+            payload["email"] = email
+        if display_name:
+            payload["display_name"] = display_name
 
         response_data = self._request("POST", endpoint, json=payload)
 

@@ -249,7 +249,12 @@ def test_connect_view_post_with_custom_event_id(event, organizer_user, rf):
         assert response.status_code == 302
         assert response.url == "http://localhost:8080/studio?event_id=99105&sso_token=jwt_token_123"
         mock_client.sync_talks.assert_called_once_with(event_id=99105, talk_slots=[])
-        mock_client.request_sso_jwt.assert_called_once_with(event_id=99105, role="organiser")
+        mock_client.request_sso_jwt.assert_called_once_with(
+            event_id=99105,
+            role="organizer",
+            email=organizer_user.email,
+            display_name=organizer_user.fullname,
+        )
 
 
 # ============================================================================

@@ -209,10 +209,17 @@
                 </h3>
             </div>
             <div class="panel-body">
+                <p><strong>{% trans "1. Obtain Event Credentials in VEditor:" %}</strong></p>
+                <ol style="padding-left: 18px; margin-bottom: 15px;">
+                    <li>{% trans "Log in to your VEditor instance and navigate to the <strong>Events</strong> page." %}</li>
+                    <li>{% trans "Click <strong>API Keys</strong> on your target event to generate an API key and copy the Event ID." %}</li>
+                    <li>{% trans "Paste the VEditor URL, API Key, and Event ID into the settings on this page and save." %}</li>
+                </ol>
+                <p><strong>{% trans "2. Synchronize & Launch:" %}</strong></p>
                 <ol style="padding-left: 18px;">
-                    <li>{% trans "Clicking 'Sync & Launch' atomically synchronizes talk titles, rooms, and timings with VEditor." %}</li>
-                    <li>{% trans "A secure single sign-on token is requested for your organizer session." %}</li>
-                    <li>{% trans "You are instantly redirected to your conference dashboard in VEditor without logging in again." %}</li>
+                    <li>{% trans "Clicking 'Sync Talks & Launch VEditor' atomically synchronizes talk titles, rooms, and schedule timings with VEditor." %}</li>
+                    <li>{% trans "A secure single sign-on token carrying your identity is requested for your organizer session." %}</li>
+                    <li>{% trans "You are seamlessly redirected to your conference dashboard in VEditor without logging in again." %}</li>
                 </ol>
             </div>
         </div>
