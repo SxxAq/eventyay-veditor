@@ -184,8 +184,13 @@ class VEditorClient:
             The live VEditor schedule import endpoint matches and upserts talks based on
             `(event_id, title, start)` and returns `{"status": "ok", "imported_count": N}`.
         """
+        try:
+            normalized_event_id: int | str = int(event_id)
+        except (ValueError, TypeError):
+            normalized_event_id = event_id
+
         serialized = serialize_talks(talk_slots, event_id=event_id)
-        payload = {"event_id": event_id, "talks": serialized}
+        payload = {"event_id": normalized_event_id, "talks": serialized}
         return self._request("POST", "/talks/schedule/import", json=payload)
 
     def get_scoped_event_id(self) -> int:

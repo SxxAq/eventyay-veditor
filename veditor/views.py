@@ -122,18 +122,8 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
         try:
             client = VEditorClient(event=event)
-            # Auto-resolve target event ID from the event-scoped API key if not manually provided
-            raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
-            if raw_event_id:
-                try:
-                    target_event_id = int(raw_event_id)
-                except ValueError:
-                    target_event_id = client.get_scoped_event_id()
-            else:
-                try:
-                    target_event_id = client.get_scoped_event_id()
-                except Exception:
-                    target_event_id = int(event.id)
+            # Auto-resolve target event ID from the event-scoped API key
+            target_event_id = client.get_scoped_event_id()
 
             # 1. Atomic bulk synchronization of talks
             client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
