@@ -349,3 +349,100 @@ def test_form_url_validation():
     form_insecure = VEditorSettingsForm(data={"veditor_api_base_url": "http://insecure.example.com", "veditor_api_key": "key"})
     assert not form_insecure.is_valid()
     assert "veditor_api_base_url" in form_insecure.errors
+
+
+def test_form_blank_api_key_handling():
+    from veditor.forms import VEditorSettingsForm
+
+    # Blank key is valid when has_existing_key=True
+    form_existing = VEditorSettingsForm(
+        data={"veditor_api_base_url": "https://editor.example.com", "veditor_api_key": ""},
+        has_existing_key=True,
+    )
+    assert form_existing.is_valid()
+
+    # Blank key is rejected when has_existing_key=False
+    form_new = VEditorSettingsForm(
+        data={"veditor_api_base_url": "https://editor.example.com", "veditor_api_key": ""},
+        has_existing_key=False,
+    )
+    assert not form_new.is_valid()
+    assert "veditor_api_key" in form_new.errors
+
+
+def test_connect_view_post_open_studio_action_skips_talk_sync(event, organizer_user, rf):
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={"action": "open_studio"},
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    with patch("veditor.views.VEditorClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.base_url = "https://editor.example.com"
+        mock_client.get_scoped_event_id.return_value = event.id
+        mock_client.request_sso_jwt.return_value = "mock_token"
+
+        view = ConnectView.as_view()
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+        assert response.status_code == 302
+        assert not mock_client.sync_talks.called
+        assert mock_client.request_sso_jwt.called
+
+
+def test_connect_view_post_sso_error_does_not_label_sync_failure(event, organizer_user, rf):
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={"action": "sync_and_launch"},
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    with patch("veditor.views.VEditorClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.base_url = "https://editor.example.com"
+        mock_client.get_scoped_event_id.return_value = event.id
+        mock_client.sync_talks.return_value = {"status": "ok"}
+        mock_client.request_sso_jwt.side_effect = VEditorNetworkError("SSO signature endpoint unreachable")
+
+        view = ConnectView.as_view()
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+        assert response.status_code == 200
+        messages = [str(m.message) for m in request._messages]
+        assert any("Failed to establish VEditor SSO session" in m for m in messages)
+        assert not any("Failed to synchronize talks" in m for m in messages)
+
+
+def test_connect_view_post_save_settings_preserves_existing_key(event, organizer_user, rf):
+    event.settings.set("veditor_api_key", "original-secret-key")
+    event.settings.set("veditor_api_base_url", "http://localhost:8080")
+
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "save_settings",
+                "veditor_api_base_url": "https://editor.example.com",
+                "veditor_api_key": "",
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    view = ConnectView.as_view()
+    response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+    assert response.status_code == 302
+    assert event.settings.get("veditor_api_base_url") == "https://editor.example.com"
+    assert event.settings.get("veditor_api_key") == "original-secret-key"

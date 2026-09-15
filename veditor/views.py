@@ -66,13 +66,14 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             or "http://localhost:8080"
         )
         saved_key = (event.settings.get("veditor_api_key") if hasattr(event, "settings") else None) or os.environ.get("VEDITOR_API_KEY")
+        has_saved_key = bool(saved_key)
 
         if "form" not in context:
             context["form"] = VEditorSettingsForm(
                 initial={
                     "veditor_api_base_url": saved_url,
-                    "veditor_api_key": saved_key,
-                }
+                },
+                has_existing_key=has_saved_key,
             )
 
         try:
@@ -89,9 +90,11 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         """Handle saving settings or executing talk synchronization and redirect."""
         event = request.event
         action = request.POST.get("action")
+        saved_key = (event.settings.get("veditor_api_key") if hasattr(event, "settings") else None) or os.environ.get("VEDITOR_API_KEY")
+        has_saved_key = bool(saved_key)
 
         if action == "save_settings":
-            form = VEditorSettingsForm(request.POST)
+            form = VEditorSettingsForm(request.POST, has_existing_key=has_saved_key)
             if form.is_valid():
                 if hasattr(event, "settings"):
                     base_url_val = (form.cleaned_data.get("veditor_api_base_url") or "").strip()
@@ -100,10 +103,9 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     elif "veditor_api_base_url" in form.cleaned_data:
                         event.settings.set("veditor_api_base_url", "")
 
-                    event.settings.set(
-                        "veditor_api_key",
-                        form.cleaned_data["veditor_api_key"].strip(),
-                    )
+                    new_key = (form.cleaned_data.get("veditor_api_key") or "").strip()
+                    if new_key:
+                        event.settings.set("veditor_api_key", new_key)
 
                 messages.success(request, _("VEditor connection settings saved successfully."))
                 return redirect(
@@ -117,40 +119,58 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                 context["form"] = form
                 return self.render_to_response(context)
 
-        # Default action: sync talks and launch VEditor
+        # Action: sync talks and launch VEditor, or open studio directly
         talk_slots = self.get_talk_slots()
 
         try:
             client = VEditorClient(event=event)
             # Auto-resolve target event ID from the event-scoped API key
             target_event_id = client.get_scoped_event_id()
+        except (VEditorError, ValueError) as exc:
+            messages.error(
+                request,
+                _("Failed to connect to VEditor: {error}").format(error=str(exc)),
+            )
+            context = self.get_context_data(**kwargs)
+            return self.render_to_response(context)
 
-            # 1. Atomic bulk synchronization of talks
-            client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
+        # 1. Bulk synchronize talks unless explicitly skipped (open_studio action)
+        if action != "open_studio":
+            try:
+                client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
+            except (VEditorError, ValueError) as exc:
+                messages.error(
+                    request,
+                    _("Failed to synchronize talks with VEditor: {error}").format(error=str(exc)),
+                )
+                context = self.get_context_data(**kwargs)
+                return self.render_to_response(context)
 
-            # 2. Request scoped SSO JWT for organizer with user identity
-            user_email = getattr(request.user, "email", None) if getattr(request, "user", None) and request.user.is_authenticated else None
-            display_name = None
-            if getattr(request, "user", None) and request.user.is_authenticated:
-                display_name = getattr(request.user, "fullname", None) or getattr(request.user, "name", None)
-                if not display_name and hasattr(request.user, "get_display_name"):
-                    display_name = request.user.get_display_name()
+        # 2. Request scoped SSO JWT for organizer with user identity
+        user_email = getattr(request.user, "email", None) if getattr(request, "user", None) and request.user.is_authenticated else None
+        display_name = None
+        if getattr(request, "user", None) and request.user.is_authenticated:
+            display_name = getattr(request.user, "fullname", None) or getattr(request.user, "name", None)
+            if not display_name and hasattr(request.user, "get_display_name"):
+                display_name = request.user.get_display_name()
 
+        try:
             token = client.request_sso_jwt(
                 event_id=target_event_id,
                 role="organizer",
                 email=user_email,
                 display_name=display_name,
             )
+            # The SSO token is transmitted via a short-lived query param on initial landing.
+            # VEditor immediately consumes it, exchanges it for an HttpOnly cookie, and issues
+            # an HTTP 303 redirect that strips the token parameter from the browser URL,
+            # mitigating exposure in browser history and logs.
             redirect_url = f"{client.base_url}/studio?event_id={target_event_id}&sso_token={token}"
-
-            # 3. Redirect browser to VEditor
             return HttpResponseRedirect(redirect_url)
-
         except (VEditorError, ValueError) as exc:
             messages.error(
                 request,
-                _("Failed to synchronize talks with VEditor: {error}").format(error=str(exc)),
+                _("Failed to establish VEditor SSO session: {error}").format(error=str(exc)),
             )
             context = self.get_context_data(**kwargs)
             return self.render_to_response(context)

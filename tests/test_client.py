@@ -132,6 +132,18 @@ def test_serialize_talks_deduplication():
     assert serialized[1]["title"] == "Workshop"
 
 
+def test_serialize_talks_distinct_external_ids_same_title_and_start():
+    # Talks with different external_ids but identical title and start time (e.g. TBA / Lightning talk)
+    slots = [
+        {"external_id": "sub-1", "title": "Lightning Talk", "start": "2026-06-01T10:00:00Z"},
+        {"external_id": "sub-2", "title": "Lightning Talk", "start": "2026-06-01T10:00:00Z"},
+    ]
+    serialized = serialize_talks(slots, event_id="1")
+    assert len(serialized) == 2
+    assert serialized[0]["external_id"] == "sub-1"
+    assert serialized[1]["external_id"] == "sub-2"
+
+
 # ============================================================================
 # Client Configuration Unit Tests
 # ============================================================================

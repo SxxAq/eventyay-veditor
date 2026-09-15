@@ -187,21 +187,28 @@
                             <i class="fa fa-refresh"></i> {% trans "Synchronize Schedule & Open Studio" %}
                         </h4>
                         <p style="color: #4b5563; font-size: 14px;">
-                            {% blocktrans trimmed with count=talks_count %}
-                            There are <strong>{{ count }}</strong> scheduled talk(s) ready to synchronize into VEditor.
-                            {% endblocktrans %}
+                            {% if talks_count %}
+                                {% blocktrans trimmed with count=talks_count %}
+                                There are <strong>{{ count }}</strong> scheduled talk(s) ready to synchronize into VEditor.
+                                {% endblocktrans %}
+                            {% else %}
+                                {% trans "No scheduled talks found for this event yet. You can still open the VEditor Studio directly." %}
+                            {% endif %}
                         </p>
 
-                        <form method="post" action="" style="margin-top: 15px;">
+                        <form method="post" action="" style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
                             {% csrf_token %}
-                            <input type="hidden" name="action" value="sync_and_launch">
-                            <button type="submit" class="btn btn-primary btn-lg" id="btn-launch-veditor" {% if not talks_count %}disabled{% endif %}>
-                                <i class="fa fa-external-link"></i> {% trans "Sync Talks & Launch VEditor" %}
-                            </button>
-                            {% if not talks_count %}
-                                <p class="text-muted" style="margin-top: 8px;">
-                                    <small>{% trans "No scheduled talks found for this event. Schedule talks to synchronize." %}</small>
-                                </p>
+                            {% if talks_count %}
+                                <button type="submit" name="action" value="sync_and_launch" class="btn btn-primary btn-lg" id="btn-launch-veditor">
+                                    <i class="fa fa-refresh"></i> {% trans "Sync Talks & Launch VEditor" %}
+                                </button>
+                                <button type="submit" name="action" value="open_studio" class="btn btn-default btn-lg" id="btn-open-studio-only">
+                                    <i class="fa fa-external-link"></i> {% trans "Open Studio without Sync" %}
+                                </button>
+                            {% else %}
+                                <button type="submit" name="action" value="open_studio" class="btn btn-primary btn-lg" id="btn-launch-veditor">
+                                    <i class="fa fa-external-link"></i> {% trans "Launch VEditor Studio" %}
+                                </button>
                             {% endif %}
                         </form>
                     </div>
