@@ -44,7 +44,17 @@ class VEditorClient:
                 return getattr(settings, name, None)
             return None
 
-        self.base_url = base_url or _get_conf("VEDITOR_API_BASE_URL") or os.environ.get("VEDITOR_API_BASE_URL")
+        resolved_base_url = (
+            base_url
+            or _get_conf("VEDITOR_API_BASE_URL")
+            or _get_conf("VEDITOR_BASE_URL")
+            or os.environ.get("VEDITOR_API_BASE_URL")
+            or os.environ.get("VEDITOR_BASE_URL")
+        )
+        if not resolved_base_url and event is not None:
+            resolved_base_url = getattr(settings, "VEDITOR_BASE_URL", None) or os.environ.get("VEDITOR_BASE_URL", "http://localhost:8080")
+
+        self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
         self.api_key = api_key or _get_conf("VEDITOR_API_KEY") or os.environ.get("VEDITOR_API_KEY")
 
         resolved_timeout = timeout if timeout is not None else _get_conf("VEDITOR_REQUEST_TIMEOUT") or os.environ.get("VEDITOR_REQUEST_TIMEOUT")
@@ -177,6 +187,19 @@ class VEditorClient:
         serialized = serialize_talks(talk_slots, event_id=event_id)
         payload = {"event_id": event_id, "talks": serialized}
         return self._request("POST", "/talks/schedule/import", json=payload)
+
+    def get_scoped_event_id(self) -> int:
+        """Resolve the target event ID in VEditor from the event-scoped API key.
+
+        Queries GET /events, which automatically returns the event(s) permitted
+        for the authenticated event-scoped API key.
+        """
+        response_data = self._request("GET", "/events")
+        if isinstance(response_data, list) and response_data:
+            first_event = response_data[0]
+            if isinstance(first_event, dict) and "id" in first_event:
+                return int(first_event["id"])
+        raise VEditorError("No event associated with this API key was found in VEditor.", response_data=response_data)
 
     def request_sso_jwt(
         self,

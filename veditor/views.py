@@ -65,24 +65,20 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             or os.environ.get("VEDITOR_API_BASE_URL")
             or "http://localhost:8080"
         )
-        saved_key = (event.settings.get("veditor_api_key") if hasattr(event, "settings") else None) or os.environ.get("VEDITOR_API_KEY") or ""
-        saved_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
+        saved_key = (event.settings.get("veditor_api_key") if hasattr(event, "settings") else None) or os.environ.get("VEDITOR_API_KEY")
 
         if "form" not in context:
             context["form"] = VEditorSettingsForm(
                 initial={
                     "veditor_api_base_url": saved_url,
                     "veditor_api_key": saved_key,
-                    "veditor_event_id": saved_event_id or "",
                 }
             )
 
         try:
             client = VEditorClient(event=event)
-            context["veditor_configured"] = True
+            context["veditor_configured"] = bool(client.api_key)
             context["veditor_base_url"] = client.base_url
-            raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
-            context["veditor_target_event_id"] = int(raw_event_id or event.id)
         except VEditorConfigError as exc:
             context["veditor_configured"] = False
             context["config_error"] = str(exc)
@@ -98,19 +94,16 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             form = VEditorSettingsForm(request.POST)
             if form.is_valid():
                 if hasattr(event, "settings"):
-                    event.settings.set(
-                        "veditor_api_base_url",
-                        form.cleaned_data["veditor_api_base_url"].rstrip("/"),
-                    )
+                    base_url_val = (form.cleaned_data.get("veditor_api_base_url") or "").strip()
+                    if base_url_val:
+                        event.settings.set("veditor_api_base_url", base_url_val.rstrip("/"))
+                    elif "veditor_api_base_url" in form.cleaned_data:
+                        event.settings.set("veditor_api_base_url", "")
+
                     event.settings.set(
                         "veditor_api_key",
                         form.cleaned_data["veditor_api_key"].strip(),
                     )
-                    event_id_val = form.cleaned_data.get("veditor_event_id")
-                    if event_id_val is not None:
-                        event.settings.set("veditor_event_id", str(event_id_val))
-                    else:
-                        event.settings.set("veditor_event_id", "")
 
                 messages.success(request, _("VEditor connection settings saved successfully."))
                 return redirect(
@@ -126,11 +119,22 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
         # Default action: sync talks and launch VEditor
         talk_slots = self.get_talk_slots()
-        raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
-        target_event_id = int(raw_event_id or event.id)
 
         try:
             client = VEditorClient(event=event)
+            # Auto-resolve target event ID from the event-scoped API key if not manually provided
+            raw_event_id = event.settings.get("veditor_event_id") if hasattr(event, "settings") else None
+            if raw_event_id:
+                try:
+                    target_event_id = int(raw_event_id)
+                except ValueError:
+                    target_event_id = client.get_scoped_event_id()
+            else:
+                try:
+                    target_event_id = client.get_scoped_event_id()
+                except Exception:
+                    target_event_id = int(event.id)
+
             # 1. Atomic bulk synchronization of talks
             client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
 

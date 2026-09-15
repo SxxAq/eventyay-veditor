@@ -9,7 +9,7 @@ app_name = "veditor"
 
 urlpatterns = [
     path(
-        "control/event/<orgslug:organizer>/<slug:event>/veditor/",
+        "common/event/<orgslug:organizer>/<slug:event>/veditor/",
         views.ConnectView.as_view(),
         name="connect",
     ),

@@ -305,6 +305,32 @@ def test_request_sso_jwt_organiser():
 
 
 @responses.activate
+def test_get_scoped_event_id_success():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[{"id": 42, "name": "Test Event"}],
+        status=200,
+    )
+    event_id = client.get_scoped_event_id()
+    assert event_id == 42
+
+
+@responses.activate
+def test_get_scoped_event_id_empty_raises():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[],
+        status=200,
+    )
+    with pytest.raises(VEditorError, match="No event associated"):
+        client.get_scoped_event_id()
+
+
+@responses.activate
 def test_request_sso_jwt_speaker():
     client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
 

@@ -143,6 +143,7 @@ def test_connect_view_post_success(event, organizer_user, rf):
     with patch("veditor.views.VEditorClient") as mock_client_cls:
         mock_client = mock_client_cls.return_value
         mock_client.base_url = "https://editor.example.com"
+        mock_client.get_scoped_event_id.return_value = event.id
         mock_client.sync_talks.return_value = {"status": "ok", "imported_count": 0}
         mock_client.request_sso_jwt.return_value = "mock_signed_jwt_token"
 
@@ -205,7 +206,6 @@ def test_connect_view_post_save_settings(event, organizer_user, rf):
                 "action": "save_settings",
                 "veditor_api_base_url": "http://localhost:8080/",
                 "veditor_api_key": "new-secret-key",
-                "veditor_event_id": "99105",
             },
         )
     )
@@ -219,13 +219,33 @@ def test_connect_view_post_save_settings(event, organizer_user, rf):
     assert response.status_code == 302
     assert event.settings.get("veditor_api_base_url") == "http://localhost:8080"
     assert event.settings.get("veditor_api_key") == "new-secret-key"
-    assert event.settings.get("veditor_event_id") == "99105"
 
 
-def test_connect_view_post_with_custom_event_id(event, organizer_user, rf):
+def test_connect_view_post_save_settings_api_key_only(event, organizer_user, rf):
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "save_settings",
+                "veditor_api_base_url": "",
+                "veditor_api_key": "key-without-explicit-url",
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    view = ConnectView.as_view()
+    response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+    assert response.status_code == 302
+    assert event.settings.get("veditor_api_key") == "key-without-explicit-url"
+
+
+def test_connect_view_post_with_auto_event_id(event, organizer_user, rf):
     event.settings.set("veditor_api_base_url", "http://localhost:8080")
     event.settings.set("veditor_api_key", "valid-key")
-    event.settings.set("veditor_event_id", "99105")
 
     request = setup_request(
         rf.post(
@@ -240,6 +260,7 @@ def test_connect_view_post_with_custom_event_id(event, organizer_user, rf):
     with patch("veditor.views.VEditorClient") as mock_client_cls:
         mock_client = mock_client_cls.return_value
         mock_client.base_url = "http://localhost:8080"
+        mock_client.get_scoped_event_id.return_value = 77
         mock_client.sync_talks.return_value = {"status": "ok"}
         mock_client.request_sso_jwt.return_value = "jwt_token_123"
 
@@ -247,10 +268,11 @@ def test_connect_view_post_with_custom_event_id(event, organizer_user, rf):
         response = view(request, organizer=event.organizer.slug, event=event.slug)
 
         assert response.status_code == 302
-        assert response.url == "http://localhost:8080/studio?event_id=99105&sso_token=jwt_token_123"
-        mock_client.sync_talks.assert_called_once_with(event_id=99105, talk_slots=[])
+        assert response.url == "http://localhost:8080/studio?event_id=77&sso_token=jwt_token_123"
+        mock_client.get_scoped_event_id.assert_called_once()
+        mock_client.sync_talks.assert_called_once_with(event_id=77, talk_slots=[])
         mock_client.request_sso_jwt.assert_called_once_with(
-            event_id=99105,
+            event_id=77,
             role="organizer",
             email=organizer_user.email,
             display_name=organizer_user.fullname,
