@@ -188,16 +188,16 @@ class VEditorClient:
     ) -> str:
         """Request a scoped SSO JWT token for browser handoff, reviewer QA, or speaker review."""
         normalized_role = "organizer" if role in ("organiser", "organizer") else role
-        if normalized_role in ("organizer", "reviewer"):
+        if normalized_role == "organizer":
             endpoint = f"/events/{event_id}/sso-token"
-            payload = {"role": normalized_role}
+            payload = {"role": "organizer"}
         elif normalized_role == "speaker":
             if not talk_id:
                 raise ValueError("talk_id is required when requesting a speaker SSO token")
             endpoint = f"/talks/{talk_id}/sso-token"
             payload = {"role": "speaker"}
         else:
-            raise ValueError(f"Unsupported role '{role}'. Allowed roles are 'organizer', 'reviewer', and 'speaker'.")
+            raise ValueError(f"Unsupported role '{role}'. Allowed roles are 'organizer' and 'speaker'.")
 
         if email:
             payload["email"] = email
