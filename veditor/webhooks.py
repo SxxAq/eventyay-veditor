@@ -143,11 +143,7 @@ class WebhookView(View):
             try:
                 from eventyay.base.models import Event
 
-                event_obj = (
-                    Event.objects.filter(id=event_id).first()
-                    if str(event_id).isdigit()
-                    else Event.objects.filter(slug=str(event_id)).first()
-                )
+                event_obj = Event.objects.filter(id=event_id).first() if str(event_id).isdigit() else Event.objects.filter(slug=str(event_id)).first()
                 if event_obj and hasattr(event_obj, "settings"):
                     secret = event_obj.settings.get("veditor_webhook_secret")
             except Exception as exc:  # noqa: BLE001

@@ -5,100 +5,10 @@
 {% block title %}{% trans "VEditor Video Studio" %} :: {{ event.name }}{% endblock %}
 
 {% block content %}
-<style>
-.veditor-dashboard-hero {
-    background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
-    color: #ffffff;
-    border-radius: 8px;
-    padding: 24px 28px;
-    margin-bottom: 24px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-}
-.veditor-dashboard-hero h2 {
-    color: #ffffff;
-    margin-top: 0;
-    margin-bottom: 8px;
-    font-size: 24px;
-    font-weight: 600;
-}
-.veditor-dashboard-hero p {
-    color: #d1d5db;
-    font-size: 14px;
-    line-height: 1.5;
-    margin-bottom: 0;
-    max-width: 750px;
-}
-.veditor-card {
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    margin-bottom: 20px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
-}
-.veditor-card-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid #e5e7eb;
-    background: #f9fafb;
-    border-top-left-radius: 7px;
-    border-top-right-radius: 7px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-.veditor-card-title {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-    color: #111827;
-}
-.veditor-card-body {
-    padding: 20px;
-}
-.badge-status-connected {
-    background-color: #def7ec;
-    color: #03543f;
-    font-weight: 600;
-    padding: 5px 12px;
-    border-radius: 9999px;
-    font-size: 12px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-.badge-status-disconnected {
-    background-color: #fef08a;
-    color: #713f12;
-    font-weight: 600;
-    padding: 5px 12px;
-    border-radius: 9999px;
-    font-size: 12px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-.veditor-status-row {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    padding: 14px 18px;
-    margin-bottom: 20px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-.veditor-callout {
-    border-left: 4px solid #3b82f6;
-    background: #eff6ff;
-    padding: 12px 16px;
-    border-radius: 0 6px 6px 0;
-    margin-bottom: 18px;
-    font-size: 13px;
-    color: #1e40af;
-}
-</style>
+<link rel="stylesheet" type="text/css" href="{% static "veditor/css/connect.css" %}">
 
 <div class="veditor-dashboard-hero">
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
+    <div class="veditor-hero-inner">
         <div>
             <h2><i class="fa fa-video-camera"></i> {% trans "VEditor Video Studio" %}</h2>
             <p>
@@ -111,7 +21,7 @@
         <div>
             {% if veditor_configured %}
                 <span class="badge-status-connected">
-                    <i class="fa fa-circle" style="font-size: 8px;"></i> {% trans "Connected" %}
+                    <i class="fa fa-circle badge-status-dot"></i> {% trans "Connected" %}
                 </span>
             {% else %}
                 <span class="badge-status-disconnected">
@@ -140,17 +50,17 @@
                     <div class="veditor-status-row">
                         <div>
                             <strong><i class="fa fa-globe"></i> {% trans "Service Endpoint" %}:</strong>
-                            <code style="margin-left: 6px;">{{ veditor_base_url }}</code>
-                            <div class="text-muted" style="font-size: 12px; margin-top: 4px;">
+                            <code class="veditor-status-endpoint">{{ veditor_base_url }}</code>
+                            <div class="text-muted veditor-status-help">
                                 <i class="fa fa-check text-success"></i> {% trans "Event automatically resolved via your event-scoped API key." %}
                             </div>
                         </div>
                     </div>
 
-                    <div class="collapse" id="settingsCollapse" style="margin-bottom: 24px;">
-                        <div class="panel panel-default" style="border: 1px dashed #cbd5e1;">
+                    <div class="collapse veditor-settings-collapse" id="settingsCollapse">
+                        <div class="panel panel-default veditor-settings-panel">
                             <div class="panel-body">
-                                <h4 style="margin-top: 0; font-size: 15px; font-weight: 600;">{% trans "Update VEditor Credentials" %}</h4>
+                                <h4 class="veditor-settings-title">{% trans "Update VEditor Credentials" %}</h4>
                                 <form method="post" action="">
                                     {% csrf_token %}
                                     <input type="hidden" name="action" value="save_settings">
@@ -182,11 +92,11 @@
                         </div>
                     </div>
 
-                    <div class="well" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: none;">
-                        <h4 style="margin-top: 0; font-size: 16px; font-weight: 600;">
+                    <div class="well veditor-launch-well">
+                        <h4 class="veditor-launch-title">
                             <i class="fa fa-refresh"></i> {% trans "Synchronize Schedule & Open Studio" %}
                         </h4>
-                        <p style="color: #4b5563; font-size: 14px;">
+                        <p class="veditor-launch-desc">
                             {% if talks_count %}
                                 {% blocktrans trimmed with count=talks_count %}
                                 There are <strong>{{ count }}</strong> scheduled talk(s) ready to synchronize into VEditor.
@@ -196,7 +106,7 @@
                             {% endif %}
                         </p>
 
-                        <form method="post" action="" style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                        <form method="post" action="" class="veditor-btn-group">
                             {% csrf_token %}
                             {% if talks_count %}
                                 <button type="submit" name="action" value="sync_and_launch" class="btn btn-primary btn-lg" id="btn-launch-veditor">
@@ -257,13 +167,14 @@
                 </h3>
             </div>
             <div class="table-responsive">
-                <table class="table table-striped table-hover" style="margin-bottom: 0;">
+                <table class="table table-striped table-hover veditor-table-clean">
                     <thead>
                         <tr>
-                            <th style="width: 15%;">{% trans "Code" %}</th>
-                            <th style="width: 45%;">{% trans "Title" %}</th>
-                            <th style="width: 20%;">{% trans "Room" %}</th>
-                            <th style="width: 20%;">{% trans "Start Time (UTC)" %}</th>
+                            <th style="width: 12%;">{% trans "Code" %}</th>
+                            <th style="width: 38%;">{% trans "Title" %}</th>
+                            <th style="width: 15%;">{% trans "Room" %}</th>
+                            <th style="width: 15%;">{% trans "Start Time (UTC)" %}</th>
+                            <th style="width: 20%;" class="text-right">{% trans "Speaker Review" %}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -278,6 +189,17 @@
                                 {% else %}
                                     —
                                 {% endif %}
+                            </td>
+                            <td class="text-right">
+                                <form method="post" action="" class="veditor-table-action-form">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="resend_speaker_link">
+                                    <input type="hidden" name="submission_code" value="{{ slot.submission.code|default:slot.id }}">
+                                    <input type="hidden" name="external_id" value="{{ slot.submission.code|default:slot.id }}">
+                                    <button type="submit" class="btn btn-default btn-xs" title="{% trans "Send or resend review magic link to talk speakers" %}">
+                                        <i class="fa fa-paper-plane-o"></i> {% trans "Send Link" %}
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                         {% endfor %}
@@ -295,19 +217,19 @@
                     <i class="fa fa-info-circle text-primary"></i> {% trans "Integration Guide" %}
                 </h3>
             </div>
-            <div class="veditor-card-body" style="font-size: 13px; line-height: 1.6;">
+            <div class="veditor-card-body veditor-guide-body">
                 <p><strong>{% trans "1. Generate an Event-Scoped API Key:" %}</strong></p>
-                <ol style="padding-left: 18px; margin-bottom: 16px;">
+                <ol class="veditor-guide-list">
                     <li>{% trans "Log in to your VEditor instance and open <strong>Events</strong>." %}</li>
                     <li>{% trans "Click <strong>API Keys</strong> on your target event to generate an API key." %}</li>
                     <li>{% trans "Paste the API key into this form and save." %}</li>
                 </ol>
                 <p><strong>{% trans "2. Zero-Config Target Event:" %}</strong></p>
-                <p class="text-muted" style="margin-bottom: 16px;">
+                <p class="text-muted veditor-guide-desc">
                     {% trans "Because the API key is scoped to your event in VEditor, Eventyay automatically resolves the corresponding event without requiring manual Event ID registration." %}
                 </p>
                 <p><strong>{% trans "3. Synchronize & Launch:" %}</strong></p>
-                <ol style="padding-left: 18px; margin-bottom: 0;">
+                <ol class="veditor-guide-list-last">
                     <li>{% trans "Click 'Sync Talks & Launch VEditor' to publish schedule changes." %}</li>
                     <li>{% trans "A secure single sign-on token authenticates your organizer session automatically." %}</li>
                 </ol>

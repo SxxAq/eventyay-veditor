@@ -17,6 +17,7 @@ from eventyay.control.permissions import EventPermissionRequiredMixin
 from .client import VEditorClient
 from .exceptions import VEditorConfigError, VEditorError
 from .forms import VEditorSettingsForm
+from .tasks import process_talk_approved
 
 
 class ConnectView(EventPermissionRequiredMixin, TemplateView):
@@ -118,6 +119,39 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                 context = self.get_context_data(**kwargs)
                 context["form"] = form
                 return self.render_to_response(context)
+
+        elif action == "resend_speaker_link":
+            talk_id = request.POST.get("talk_id")
+            external_id = request.POST.get("external_id") or request.POST.get("submission_code")
+            if not external_id and not talk_id:
+                messages.error(request, _("No talk selected for speaker review link dispatch."))
+                return redirect(
+                    reverse(
+                        "plugins:veditor:connect",
+                        kwargs={"organizer": event.organizer.slug, "event": event.slug},
+                    )
+                )
+
+            try:
+                process_talk_approved.delay(
+                    event_id=getattr(event, "id", None),
+                    talk_id=talk_id or external_id,
+                    external_id=external_id,
+                )
+            except Exception:
+                process_talk_approved(
+                    event_id=getattr(event, "id", None),
+                    talk_id=talk_id or external_id,
+                    external_id=external_id,
+                )
+
+            messages.success(request, _("Speaker review link has been queued for dispatch."))
+            return redirect(
+                reverse(
+                    "plugins:veditor:connect",
+                    kwargs={"organizer": event.organizer.slug, "event": event.slug},
+                )
+            )
 
         # Action: sync talks and launch VEditor, or open studio directly
         talk_slots = self.get_talk_slots()

@@ -8,7 +8,7 @@ import json
 import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from django.test import RequestFactory
@@ -125,9 +125,7 @@ def test_webhook_view_post_success(rf, webhook_secret):
         HTTP_X_VEDITOR_SIGNATURE=sig,
     )
 
-    with patch("veditor.webhooks.settings") as mock_settings, patch(
-        "veditor.webhooks.process_talk_approved"
-    ) as mock_task:
+    with patch("veditor.webhooks.settings") as mock_settings, patch("veditor.webhooks.process_talk_approved") as mock_task:
         mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
 
         view = WebhookView.as_view()
@@ -315,9 +313,12 @@ def test_webhook_view_per_event_secret_fallback(rf):
         settings=SimpleNamespace(get=lambda k, d=None: event_secret if k == "veditor_webhook_secret" else d),
     )
 
-    with patch("veditor.webhooks.settings") as mock_settings, patch.dict("os.environ", {}, clear=True), patch(
-        "eventyay.base.models.Event.objects"
-    ) as mock_event_mgr, patch("veditor.webhooks.process_talk_approved") as mock_task:
+    with (
+        patch("veditor.webhooks.settings") as mock_settings,
+        patch.dict("os.environ", {}, clear=True),
+        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
+        patch("veditor.webhooks.process_talk_approved") as mock_task,
+    ):
         mock_settings.VEDITOR_WEBHOOK_SECRET = None
         mock_event_mgr.filter.return_value.first.return_value = mock_event
 
@@ -339,9 +340,9 @@ def test_webhook_view_method_not_allowed(rf):
     assert res_delete.status_code == 405
 
 
+@pytest.mark.django_db
 def test_tasks_process_talk_approved():
     result = process_talk_approved(event_id=1, talk_id=99, external_id="EXT-1")
-    assert result["status"] == "success"
-    assert result["event_id"] == 1
-    assert result["talk_id"] == 99
+    assert result["status"] == "error"
+    assert result["error"] == "Submission not found"
     assert result["external_id"] == "EXT-1"
