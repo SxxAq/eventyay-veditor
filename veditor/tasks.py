@@ -168,7 +168,12 @@ def process_talk_approved(
         if not resolved_talk_id.isdigit():
             try:
                 target_slot = talk_slot or (submission.slots.first() if hasattr(submission, "slots") else None) or submission
-                sync_resp = client.sync_talk(target_slot, event_id=str(event_obj.id))
+                scoped_event_id = None
+                try:
+                    scoped_event_id = client.get_scoped_event_id()
+                except Exception:
+                    scoped_event_id = getattr(event_obj, "id", None)
+                sync_resp = client.sync_talk(target_slot, event_id=scoped_event_id)
                 if isinstance(sync_resp, dict) and "id" in sync_resp:
                     resolved_talk_id = str(sync_resp["id"])
                     logger.info("Resolved VEditor integer talk_id=%s for submission %s", resolved_talk_id, submission.code)

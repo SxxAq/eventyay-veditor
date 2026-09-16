@@ -138,12 +138,18 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
             if getattr(settings, "DEBUG", False):
                 try:
-                    process_talk_approved(
+                    result = process_talk_approved(
                         event_id=getattr(event, "id", None),
                         talk_id=talk_id or external_id,
                         external_id=external_id,
                     )
-                    messages.success(request, _("Speaker review link has been dispatched."))
+                    if isinstance(result, dict) and result.get("sent_count", 0) > 0:
+                        messages.success(request, _("Speaker review link has been dispatched."))
+                    elif isinstance(result, dict) and result.get("failed"):
+                        err_msg = result["failed"][0].get("error", "Unknown error")
+                        messages.error(request, _("Failed to dispatch speaker review link: {error}").format(error=err_msg))
+                    else:
+                        messages.warning(request, _("No speaker review link was dispatched."))
                     return redirect(
                         reverse(
                             "plugins:veditor:connect",
