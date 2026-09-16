@@ -44,6 +44,9 @@ class VEditorClient:
                 return getattr(settings, name, None)
             return None
 
+        event_has_custom_url = bool(event is not None and hasattr(event, "settings") and event.settings.get("veditor_api_base_url"))
+        event_custom_key = event.settings.get("veditor_api_key") if event is not None and hasattr(event, "settings") else None
+
         resolved_base_url = (
             base_url
             or _get_conf("VEDITOR_API_BASE_URL")
@@ -54,6 +57,18 @@ class VEditorClient:
 
         self.event = event
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
+
+        # Prevent leaking global VEDITOR_API_KEY to unverified custom event URLs
+        if event_has_custom_url and not event_custom_key and not api_key:
+            allowed = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", None)
+            parsed_url = urlparse(self.base_url) if self.base_url else None
+            origin = f"{parsed_url.scheme}://{parsed_url.netloc}" if parsed_url else ""
+            if not allowed or origin not in allowed:
+                raise VEditorConfigError(
+                    "Cannot use global VEDITOR_API_KEY with a custom unallowlisted event URL. "
+                    "Configure an event-specific API key or add the origin to VEDITOR_ALLOWED_ORIGINS."
+                )
+
         self.api_key = api_key or _get_conf("VEDITOR_API_KEY") or os.environ.get("VEDITOR_API_KEY")
 
         resolved_timeout = timeout if timeout is not None else _get_conf("VEDITOR_REQUEST_TIMEOUT") or os.environ.get("VEDITOR_REQUEST_TIMEOUT")

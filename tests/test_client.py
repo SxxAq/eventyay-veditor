@@ -144,6 +144,18 @@ def test_serialize_talks_distinct_external_ids_same_title_and_start():
     assert serialized[1]["external_id"] == "sub-2"
 
 
+def test_serialize_talks_preserves_multiple_occurrences_of_same_submission():
+    # A single submission scheduled across multiple distinct slots (e.g. repeat session or workshop)
+    slots = [
+        {"external_id": "sub-100", "title": "Advanced Python", "start": "2026-06-01T10:00:00Z"},
+        {"external_id": "sub-100", "title": "Advanced Python", "start": "2026-06-01T14:00:00Z"},
+    ]
+    serialized = serialize_talks(slots, event_id="1")
+    assert len(serialized) == 2
+    assert serialized[0]["start"] == "2026-06-01T10:00:00+00:00"
+    assert serialized[1]["start"] == "2026-06-01T14:00:00+00:00"
+
+
 # ============================================================================
 # Client Configuration Unit Tests
 # ============================================================================
@@ -597,3 +609,46 @@ def test_client_non_dict_error_response():
         client.sync_talk({"external_id": "1"})
 
     assert "bulk error item 1" in str(exc_info.value)
+
+
+@responses.activate
+def test_get_scoped_event_id_single_event():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[{"id": 100409, "name": "Codemania"}],
+        status=200,
+    )
+    assert client.get_scoped_event_id() == 100409
+
+
+@responses.activate
+def test_get_scoped_event_id_ambiguous_multiple_events():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[{"id": 101, "name": "Event A"}, {"id": 102, "name": "Event B"}],
+        status=200,
+    )
+    with pytest.raises(VEditorError, match="Ambiguous API key scope"):
+        client.get_scoped_event_id()
+
+
+def test_client_prevents_global_key_leakage_to_custom_url():
+    event_mock = SimpleNamespace(settings=SimpleNamespace(get=lambda k, d=None: "https://attacker.test" if k == "veditor_api_base_url" else None))
+    with patch.dict("os.environ", {"VEDITOR_API_KEY": "global-secret-key"}):
+        with pytest.raises(VEditorConfigError, match="Cannot use global VEDITOR_API_KEY"):
+            VEditorClient(event=event_mock)
+
+
+def test_client_allows_custom_url_with_explicit_event_key():
+    event_mock = SimpleNamespace(
+        settings=SimpleNamespace(
+            get=lambda k, d=None: "https://custom.test" if k == "veditor_api_base_url" else ("event-key-456" if k == "veditor_api_key" else None)
+        )
+    )
+    client = VEditorClient(event=event_mock)
+    assert client.base_url == "https://custom.test"
+    assert client.api_key == "event-key-456"
