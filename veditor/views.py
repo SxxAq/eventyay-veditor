@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
+from django.conf import settings
 from django.contrib import messages
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect
@@ -18,6 +20,8 @@ from .client import VEditorClient
 from .exceptions import VEditorConfigError, VEditorError
 from .forms import VEditorSettingsForm
 from .tasks import process_talk_approved
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectView(EventPermissionRequiredMixin, TemplateView):
@@ -131,6 +135,23 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                         kwargs={"organizer": event.organizer.slug, "event": event.slug},
                     )
                 )
+
+            if getattr(settings, "DEBUG", False):
+                try:
+                    process_talk_approved(
+                        event_id=getattr(event, "id", None),
+                        talk_id=talk_id or external_id,
+                        external_id=external_id,
+                    )
+                    messages.success(request, _("Speaker review link has been dispatched."))
+                    return redirect(
+                        reverse(
+                            "plugins:veditor:connect",
+                            kwargs={"organizer": event.organizer.slug, "event": event.slug},
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning("Direct dispatch in DEBUG mode failed, falling back to celery: %s", exc)
 
             try:
                 process_talk_approved.delay(

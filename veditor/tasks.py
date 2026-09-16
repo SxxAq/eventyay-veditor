@@ -164,6 +164,17 @@ def process_talk_approved(
         failed_recipients: list[dict[str, str]] = []
         resolved_talk_id = str(talk_id) if talk_id else str(external_id or submission.code)
 
+        # If talk_id is non-numeric (e.g. passed from submission code), auto-resolve integer ID via VEditor sync
+        if not resolved_talk_id.isdigit():
+            try:
+                target_slot = talk_slot or (submission.slots.first() if hasattr(submission, "slots") else None) or submission
+                sync_resp = client.sync_talk(target_slot, event_id=str(event_obj.id))
+                if isinstance(sync_resp, dict) and "id" in sync_resp:
+                    resolved_talk_id = str(sync_resp["id"])
+                    logger.info("Resolved VEditor integer talk_id=%s for submission %s", resolved_talk_id, submission.code)
+            except Exception as sync_exc:
+                logger.warning("Could not auto-resolve integer talk_id from VEditor for %s: %s", submission.code, sync_exc)
+
         for speaker in speakers:
             speaker_email = getattr(speaker, "email", None)
             if not speaker_email:
