@@ -3,7 +3,7 @@
 from django.urls import path
 from eventyay.common.urls import OrganizerSlugConverter  # noqa: F401
 
-from . import views
+from . import views, webhooks
 
 app_name = "veditor"
 
@@ -12,5 +12,10 @@ urlpatterns = [
         "common/event/<orgslug:organizer>/<slug:event>/veditor/",
         views.ConnectView.as_view(),
         name="connect",
+    ),
+    path(
+        "api/v1/veditor/webhook/",
+        webhooks.WebhookView.as_view(),
+        name="webhook",
     ),
 ]
