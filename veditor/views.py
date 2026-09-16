@@ -38,13 +38,16 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         else:
             slots = list(schedule.talks.filter(submission__isnull=False).select_related("submission", "room").order_by("start"))
 
-        # Deduplicate by submission_id to avoid multiples across schedule revisions
-        seen_submissions = set()
+        # Deduplicate by slot occurrence identity to avoid multiples across schedule revisions
+        seen_slot_ids = set()
         unique_slots = []
         for slot in slots:
-            sub_id = getattr(slot, "submission_id", None) or getattr(slot, "id", None)
-            if sub_id not in seen_submissions:
-                seen_submissions.add(sub_id)
+            slot_id = getattr(slot, "id", None)
+            if slot_id is not None:
+                if slot_id not in seen_slot_ids:
+                    seen_slot_ids.add(slot_id)
+                    unique_slots.append(slot)
+            else:
                 unique_slots.append(slot)
 
         return unique_slots

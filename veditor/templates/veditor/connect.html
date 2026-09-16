@@ -1,6 +1,7 @@
 {% extends "eventyay_common/event/base.html" %}
 {% load i18n %}
 {% load static %}
+{% load tz %}
 
 {% block title %}{% trans "VEditor Video Studio" %} :: {{ event.name }}{% endblock %}
 
@@ -274,7 +275,7 @@
                             <td>{{ slot.room.name|default:"—" }}</td>
                             <td>
                                 {% if slot.start %}
-                                    {{ slot.start|date:"Y-m-d H:i" }}
+                                    {{ slot.start|utc|date:"Y-m-d H:i" }}
                                 {% else %}
                                     —
                                 {% endif %}

@@ -44,6 +44,9 @@ class VEditorClient:
                 return getattr(settings, name, None)
             return None
 
+        event_has_custom_url = bool(event is not None and hasattr(event, "settings") and event.settings.get("veditor_api_base_url"))
+        event_custom_key = event.settings.get("veditor_api_key") if event is not None and hasattr(event, "settings") else None
+
         resolved_base_url = (
             base_url
             or _get_conf("VEDITOR_API_BASE_URL")
@@ -55,6 +58,18 @@ class VEditorClient:
             resolved_base_url = getattr(settings, "VEDITOR_BASE_URL", None) or os.environ.get("VEDITOR_BASE_URL", "http://localhost:8080")
 
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
+
+        # Prevent leaking global VEDITOR_API_KEY to unverified custom event URLs
+        if event_has_custom_url and not event_custom_key and not api_key:
+            allowed = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", None)
+            parsed_url = urlparse(self.base_url) if self.base_url else None
+            origin = f"{parsed_url.scheme}://{parsed_url.netloc}" if parsed_url else ""
+            if not allowed or origin not in allowed:
+                raise VEditorConfigError(
+                    "Cannot use global VEDITOR_API_KEY with a custom unallowlisted event URL. "
+                    "Configure an event-specific API key or add the origin to VEDITOR_ALLOWED_ORIGINS."
+                )
+
         self.api_key = api_key or _get_conf("VEDITOR_API_KEY") or os.environ.get("VEDITOR_API_KEY")
 
         resolved_timeout = timeout if timeout is not None else _get_conf("VEDITOR_REQUEST_TIMEOUT") or os.environ.get("VEDITOR_REQUEST_TIMEOUT")
@@ -197,13 +212,20 @@ class VEditorClient:
         """Resolve the target event ID in VEditor from the event-scoped API key.
 
         Queries GET /events, which automatically returns the event(s) permitted
-        for the authenticated event-scoped API key.
+        for the authenticated event-scoped API key. Rejects ambiguous keys that
+        span multiple events.
         """
         response_data = self._request("GET", "/events")
-        if isinstance(response_data, list) and response_data:
-            first_event = response_data[0]
-            if isinstance(first_event, dict) and "id" in first_event:
-                return int(first_event["id"])
+        if isinstance(response_data, list):
+            if len(response_data) == 1:
+                first_event = response_data[0]
+                if isinstance(first_event, dict) and "id" in first_event:
+                    return int(first_event["id"])
+            elif len(response_data) > 1:
+                raise VEditorError(
+                    "Ambiguous API key scope: multiple events associated with this key in VEditor.",
+                    response_data=response_data,
+                )
         raise VEditorError("No event associated with this API key was found in VEditor.", response_data=response_data)
 
     def request_sso_jwt(
