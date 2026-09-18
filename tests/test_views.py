@@ -431,7 +431,7 @@ def test_connect_view_post_save_settings_preserves_existing_key(event, organizer
             reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
             data={
                 "action": "save_settings",
-                "veditor_api_base_url": "https://editor.example.com",
+                "veditor_api_base_url": "http://localhost:8080",
                 "veditor_api_key": "",
             },
         )
@@ -444,5 +444,31 @@ def test_connect_view_post_save_settings_preserves_existing_key(event, organizer
     response = view(request, organizer=event.organizer.slug, event=event.slug)
 
     assert response.status_code == 302
-    assert event.settings.get("veditor_api_base_url") == "https://editor.example.com"
+    assert event.settings.get("veditor_api_base_url") == "http://localhost:8080"
     assert event.settings.get("veditor_api_key") == "original-secret-key"
+
+
+def test_connect_view_post_save_settings_rejects_origin_change_without_new_key(event, organizer_user, rf):
+    event.settings.set("veditor_api_key", "original-secret-key")
+    event.settings.set("veditor_api_base_url", "http://localhost:8080")
+
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "save_settings",
+                "veditor_api_base_url": "https://editor.example.com",
+                "veditor_api_key": "",
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    view = ConnectView.as_view()
+    response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+    assert response.status_code == 200
+    assert "form" in response.context_data
+    assert "veditor_api_key" in response.context_data["form"].errors

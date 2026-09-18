@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.core import mail
+from django.core.cache import cache
 from django.test import RequestFactory
 from django.urls import reverse
-from django.utils.timezone import now
-from django_scopes import scopes_disabled
-from eventyay.base.models import Event, Organizer, Submission, SubmissionType, TalkSlot, User
 
 from veditor.exceptions import VEditorConfigError, VEditorError, VEditorNetworkError
 from veditor.tasks import process_talk_approved
@@ -28,70 +27,132 @@ def setup_request(request):
     return request
 
 
+class MockEventSettings:
+    """Mock event settings storage avoiding database queries."""
+
+    def __init__(self, data=None):
+        self.data = data or {}
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def set(self, key, value):
+        self.data[key] = value
+
+
 @pytest.fixture
 def rf():
     return RequestFactory()
 
 
 @pytest.fixture
-def configured_event(db):
-    """Create a fully configured Event with VEditor settings."""
-    with scopes_disabled():
-        organizer = Organizer.objects.create(name="FOSSASIA Org", slug="fossasia-org")
-        event = Event.objects.create(
-            organizer=organizer,
-            name="FOSSASIA Summit 2026",
-            slug="fossasia-2026",
-            live=True,
-            date_from=now(),
-            plugins="veditor",
-        )
-        if hasattr(event, "settings"):
-            event.settings.set("veditor_api_key", "test-veditor-api-key-12345")
-            event.settings.set("veditor_api_base_url", "http://localhost:8080")
-            event.settings.set("mail_from", "summit@fossasia.org")
-        return event
+def configured_event():
+    """Create a fully configured mock Event with VEditor settings."""
+    organizer = SimpleNamespace(name="FOSSASIA Org", slug="fossasia-org")
+    settings = MockEventSettings(
+        {
+            "veditor_api_key": "test-veditor-api-key-12345",
+            "veditor_api_base_url": "http://localhost:8080",
+            "mail_from": "summit@fossasia.org",
+        }
+    )
+    return SimpleNamespace(
+        id=42,
+        slug="fossasia-2026",
+        name="FOSSASIA Summit 2026",
+        organizer=organizer,
+        settings=settings,
+        live=True,
+    )
 
 
 @pytest.fixture
-def submission_type(db, configured_event):
-    """Create a default talk submission type for the event."""
-    with scopes_disabled():
-        return SubmissionType.objects.create(event=configured_event, name="Talk")
-
-
-@pytest.fixture
-def speaker_user(db):
-    """Create a test speaker user."""
-    return User.objects.create_user(
+def speaker_user():
+    """Create a test speaker user mock."""
+    return SimpleNamespace(
+        id=101,
         email="speaker@example.com",
-        password="secretpassword",
         fullname="Jane Speaker",
+        name="Jane Speaker",
     )
 
 
 @pytest.fixture
-def co_speaker_user(db):
-    """Create a second test speaker user."""
-    return User.objects.create_user(
+def co_speaker_user():
+    """Create a second test speaker user mock."""
+    return SimpleNamespace(
+        id=102,
         email="cospeaker@example.com",
-        password="secretpassword",
         fullname="Alex CoSpeaker",
+        name="Alex CoSpeaker",
     )
 
 
 @pytest.fixture
-def submission(db, configured_event, submission_type, speaker_user):
+def submission(configured_event, speaker_user):
     """Create a test talk submission with a registered speaker."""
-    with scopes_disabled():
-        sub = Submission.objects.create(
-            event=configured_event,
-            submission_type=submission_type,
-            code="TALK-101",
-            title="Keynote: Open Source AI Studio",
-        )
-        sub.speakers.add(speaker_user)
-        return sub
+    speakers_list = [speaker_user]
+    speakers_mgr = MagicMock()
+    speakers_mgr.all.side_effect = lambda: list(speakers_list)
+    speakers_mgr.add.side_effect = lambda u: speakers_list.append(u) if u not in speakers_list else None
+
+    sub = SimpleNamespace(
+        id=101,
+        event=configured_event,
+        code="TALK-101",
+        title="Keynote: Open Source AI Studio",
+        speakers=speakers_mgr,
+        slots=MagicMock(),
+    )
+    sub.slots.first.return_value = None
+    return sub
+
+
+@pytest.fixture(autouse=True)
+def mock_tasks_orm(configured_event, submission):
+    """Automatically mock Event, Submission, and TalkSlot queries for task tests."""
+    cache.clear()
+    mail.outbox.clear()
+
+    with (
+        patch("veditor.tasks.Event.objects.filter") as mock_event_qs,
+        patch("veditor.tasks.Submission.objects.filter") as mock_sub_qs,
+        patch("veditor.tasks.TalkSlot.objects.filter") as mock_slot_qs,
+    ):
+
+        def filter_event(**kwargs):
+            m = MagicMock()
+            if kwargs.get("id") == configured_event.id or kwargs.get("slug") == configured_event.slug:
+                m.first.return_value = configured_event
+            else:
+                m.first.return_value = None
+            return m
+
+        def filter_sub(**kwargs):
+            m = MagicMock()
+            code = kwargs.get("code")
+            sub_id = kwargs.get("id")
+            if code == submission.code or sub_id == submission.id:
+                m.first.return_value = submission
+            else:
+                m.first.return_value = None
+            return m
+
+        def filter_slot(**kwargs):
+            m = MagicMock()
+            m.select_related.return_value = m
+            m.first.return_value = None
+            return m
+
+        mock_event_qs.side_effect = filter_event
+        mock_sub_qs.side_effect = filter_sub
+        mock_slot_qs.side_effect = filter_slot
+
+        yield {
+            "event": mock_event_qs,
+            "submission": mock_sub_qs,
+            "slot": mock_slot_qs,
+        }
 
 
 # ============================================================================
@@ -99,11 +160,8 @@ def submission(db, configured_event, submission_type, speaker_user):
 # ============================================================================
 
 
-@pytest.mark.django_db
 def test_process_talk_approved_success_single_speaker(configured_event, submission, speaker_user):
     """Verify successful JWT minting and email dispatch to a single speaker."""
-    mail.outbox.clear()
-
     with patch("veditor.tasks.VEditorClient.request_sso_jwt") as mock_jwt:
         mock_jwt.return_value = "jwt-magic-token-xyz"
 
@@ -149,12 +207,9 @@ def test_process_talk_approved_success_single_speaker(configured_event, submissi
     assert "http://localhost:8080/studio/talks/42?sso_token=jwt-magic-token-xyz" in html_content
 
 
-@pytest.mark.django_db
 def test_process_talk_approved_multiple_speakers(configured_event, submission, speaker_user, co_speaker_user):
     """Verify email dispatch to all co-speakers of a talk."""
-    with scopes_disabled():
-        submission.speakers.add(co_speaker_user)
-    mail.outbox.clear()
+    submission.speakers.add(co_speaker_user)
 
     with patch("veditor.tasks.VEditorClient.request_sso_jwt") as mock_jwt:
         mock_jwt.return_value = "token-multi-123"
@@ -172,17 +227,23 @@ def test_process_talk_approved_multiple_speakers(configured_event, submission, s
     assert mock_jwt.call_count == 2
 
 
-@pytest.mark.django_db
-def test_process_talk_approved_no_speakers(configured_event, submission_type):
+def test_process_talk_approved_no_speakers(configured_event, mock_tasks_orm):
     """Verify task skips gracefully when a submission has no speakers registered."""
-    with scopes_disabled():
-        Submission.objects.create(
-            event=configured_event,
-            submission_type=submission_type,
-            code="TALK-999",
-            title="Unassigned Panel",
-        )
-    mail.outbox.clear()
+    no_speakers_sub = SimpleNamespace(
+        id=999,
+        event=configured_event,
+        code="TALK-999",
+        title="Unassigned Panel",
+        speakers=MagicMock(all=MagicMock(return_value=[])),
+        slots=MagicMock(first=MagicMock(return_value=None)),
+    )
+
+    def filter_sub(**kwargs):
+        m = MagicMock()
+        m.first.return_value = no_speakers_sub
+        return m
+
+    mock_tasks_orm["submission"].side_effect = filter_sub
 
     result = process_talk_approved(
         event_id=configured_event.id,
@@ -195,10 +256,15 @@ def test_process_talk_approved_no_speakers(configured_event, submission_type):
     assert len(mail.outbox) == 0
 
 
-@pytest.mark.django_db
-def test_process_talk_approved_submission_not_found(configured_event):
+def test_process_talk_approved_submission_not_found(configured_event, mock_tasks_orm):
     """Verify error status when external_id and talk_id cannot be resolved to any talk."""
-    mail.outbox.clear()
+
+    def not_found(**kwargs):
+        m = MagicMock()
+        m.first.return_value = None
+        return m
+
+    mock_tasks_orm["submission"].side_effect = not_found
 
     result = process_talk_approved(
         event_id=configured_event.id,
@@ -211,22 +277,25 @@ def test_process_talk_approved_submission_not_found(configured_event):
     assert len(mail.outbox) == 0
 
 
-@pytest.mark.django_db
-def test_process_talk_approved_unconfigured_veditor_client(submission):
+def test_process_talk_approved_unconfigured_veditor_client(submission, mock_tasks_orm):
     """Verify VEditorConfigError is raised when event has no VEditor credentials configured."""
-    with scopes_disabled():
-        organizer = Organizer.objects.create(name="Bare Org", slug="bare-org")
-        bare_event = Event.objects.create(
-            organizer=organizer,
-            name="Bare Event",
-            slug="bare-event",
-            live=True,
-            date_from=now(),
-        )
-        bare_sub_type = SubmissionType.objects.create(event=bare_event, name="Talk")
-        submission.event = bare_event
-        submission.submission_type = bare_sub_type
-        submission.save()
+    organizer = SimpleNamespace(name="Bare Org", slug="bare-org")
+    bare_event = SimpleNamespace(
+        id=99,
+        slug="bare-event",
+        name="Bare Event",
+        organizer=organizer,
+        settings=MockEventSettings(),
+        live=True,
+    )
+    submission.event = bare_event
+
+    def filter_event(**kwargs):
+        m = MagicMock()
+        m.first.return_value = bare_event
+        return m
+
+    mock_tasks_orm["event"].side_effect = filter_event
 
     with patch.dict("os.environ", {}, clear=True):
         with pytest.raises(VEditorConfigError, match="not configured"):
@@ -237,7 +306,6 @@ def test_process_talk_approved_unconfigured_veditor_client(submission):
             )
 
 
-@pytest.mark.django_db
 def test_process_talk_approved_network_error_raises_for_celery_retry(configured_event, submission):
     """Verify VEditorNetworkError bubbles up unhandled so Celery's autoretry_for triggers."""
     with patch("veditor.tasks.VEditorClient.request_sso_jwt") as mock_jwt:
@@ -251,12 +319,9 @@ def test_process_talk_approved_network_error_raises_for_celery_retry(configured_
             )
 
 
-@pytest.mark.django_db
 def test_process_talk_approved_partial_failure_logs_and_continues(configured_event, submission, speaker_user, co_speaker_user):
     """Verify partial failure (one speaker raises VEditorError) allows other speakers to succeed."""
-    with scopes_disabled():
-        submission.speakers.add(co_speaker_user)
-    mail.outbox.clear()
+    submission.speakers.add(co_speaker_user)
 
     def sso_side_effect(**kwargs):
         if kwargs.get("email") == speaker_user.email:
@@ -278,20 +343,30 @@ def test_process_talk_approved_partial_failure_logs_and_continues(configured_eve
     assert len(mail.outbox) == 1
 
 
-@pytest.mark.django_db
-def test_process_talk_approved_resolves_by_talk_slot_id(configured_event, submission, speaker_user):
+def test_process_talk_approved_resolves_by_talk_slot_id(configured_event, submission, mock_tasks_orm):
     """Verify lookup resolves correctly when external_id points to a TalkSlot ID."""
-    from eventyay.base.models import Schedule
+    slot = SimpleNamespace(
+        id=789,
+        submission=submission,
+    )
 
-    with scopes_disabled():
-        schedule = Schedule.objects.create(event=configured_event)
-        slot = TalkSlot.objects.create(
-            submission=submission,
-            schedule=schedule,
-            start=now(),
-            end=now(),
-        )
-    mail.outbox.clear()
+    # Submission lookup by code returns None, but TalkSlot lookup returns slot
+    def filter_sub(**kwargs):
+        m = MagicMock()
+        m.first.return_value = None
+        return m
+
+    def filter_slot(**kwargs):
+        m = MagicMock()
+        m.select_related.return_value = m
+        if kwargs.get("id") == 789:
+            m.first.return_value = slot
+        else:
+            m.first.return_value = None
+        return m
+
+    mock_tasks_orm["submission"].side_effect = filter_sub
+    mock_tasks_orm["slot"].side_effect = filter_slot
 
     with patch("veditor.tasks.VEditorClient.request_sso_jwt") as mock_jwt:
         mock_jwt.return_value = "token-by-slot-id"
@@ -299,7 +374,7 @@ def test_process_talk_approved_resolves_by_talk_slot_id(configured_event, submis
         result = process_talk_approved(
             event_id=configured_event.id,
             talk_id="42",
-            external_id=str(slot.id),
+            external_id="789",
         )
 
     assert result["status"] == "success"
@@ -307,11 +382,8 @@ def test_process_talk_approved_resolves_by_talk_slot_id(configured_event, submis
     assert len(mail.outbox) == 1
 
 
-@pytest.mark.django_db
-def test_process_talk_approved_resolves_by_talk_id_when_no_external_id(configured_event, submission, speaker_user):
+def test_process_talk_approved_resolves_by_talk_id_when_no_external_id(configured_event, submission):
     """Verify fallback lookup when external_id is omitted and talk_id matches submission code."""
-    mail.outbox.clear()
-
     with patch("veditor.tasks.VEditorClient.request_sso_jwt") as mock_jwt:
         mock_jwt.return_value = "token-fallback"
 
@@ -326,16 +398,15 @@ def test_process_talk_approved_resolves_by_talk_id_when_no_external_id(configure
     assert len(mail.outbox) == 1
 
 
-@pytest.mark.django_db
-def test_process_talk_approved_speaker_without_email_skipped(configured_event, submission, db):
+def test_process_talk_approved_speaker_without_email_skipped(configured_event, submission):
     """Verify speakers with null or empty emails are skipped without breaking dispatch."""
-    with scopes_disabled():
-        no_email_user = User.objects.create(
-            email="",
-            fullname="Anonymous Speaker",
-        )
-        submission.speakers.add(no_email_user)
-    mail.outbox.clear()
+    no_email_user = SimpleNamespace(
+        id=103,
+        email="",
+        fullname="Anonymous Speaker",
+        name="Anonymous Speaker",
+    )
+    submission.speakers.add(no_email_user)
 
     with patch("veditor.tasks.VEditorClient.request_sso_jwt") as mock_jwt:
         mock_jwt.return_value = "token-valid"
@@ -357,7 +428,6 @@ def test_process_talk_approved_speaker_without_email_skipped(configured_event, s
 # ============================================================================
 
 
-@pytest.mark.django_db
 def test_manual_resend_speaker_link_view_success(configured_event, submission, rf):
     """Verify organizer can manually trigger review link dispatch from ConnectView."""
     user = MagicMock()
@@ -390,7 +460,6 @@ def test_manual_resend_speaker_link_view_success(configured_event, submission, r
     )
 
 
-@pytest.mark.django_db
 def test_manual_resend_speaker_link_view_no_talk_selected(configured_event, rf):
     """Verify error message when organizer attempts to resend link without selecting a talk."""
     user = MagicMock()

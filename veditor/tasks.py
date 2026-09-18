@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from django.conf import settings
+from django.core.cache import cache
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from eventyay.base.models import Event, Submission, TalkSlot
@@ -47,6 +48,7 @@ def process_talk_approved(
     talk_id: int | str = "",
     external_id: str | None = None,
     raw_payload: dict[str, Any] | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Process a talk.approved signal from VEditor and dispatch magic links to speakers.
 
@@ -59,10 +61,11 @@ def process_talk_approved(
     6. Dispatch the notification email with Celery retry handling for network transient errors.
     """
     logger.info(
-        "Processing talk.approved for event_id=%s, talk_id=%s, external_id=%s",
+        "Processing talk.approved for event_id=%s, talk_id=%s, external_id=%s, force=%s",
         event_id,
         talk_id,
         external_id,
+        force,
     )
 
     with scopes_disabled():
@@ -74,45 +77,45 @@ def process_talk_approved(
             if not event_obj:
                 event_obj = Event.objects.filter(slug=str(event_id)).first()
 
-        # 2. Resolve Submission and TalkSlot
+        # 2. Resolve Submission and TalkSlot strictly scoped to event_obj when available
         submission: Submission | None = None
         talk_slot: TalkSlot | None = None
 
         if external_id:
             if event_obj:
                 submission = Submission.objects.filter(event=event_obj, code=str(external_id)).first()
-            if not submission:
+                if not submission and str(external_id).isdigit():
+                    submission = Submission.objects.filter(event=event_obj, id=int(external_id)).first()
+                if not submission and str(external_id).isdigit():
+                    talk_slot = TalkSlot.objects.filter(submission__event_id=event_obj.id, id=int(external_id)).select_related("submission").first()
+                    if talk_slot:
+                        submission = talk_slot.submission
+            else:
                 submission = Submission.objects.filter(code=str(external_id)).first()
-
-            if not submission and str(external_id).isdigit():
-                sub_qs = Submission.objects.filter(id=int(external_id))
-                if event_obj:
-                    sub_qs = sub_qs.filter(event=event_obj)
-                submission = sub_qs.first()
-
-            if not submission and str(external_id).isdigit():
-                slot_qs = TalkSlot.objects.filter(id=int(external_id)).select_related("submission")
-                talk_slot = slot_qs.first()
-                if talk_slot:
-                    submission = talk_slot.submission
+                if not submission and str(external_id).isdigit():
+                    submission = Submission.objects.filter(id=int(external_id)).first()
+                if not submission and str(external_id).isdigit():
+                    talk_slot = TalkSlot.objects.filter(id=int(external_id)).select_related("submission").first()
+                    if talk_slot:
+                        submission = talk_slot.submission
 
         if not submission and talk_id:
             if event_obj:
                 submission = Submission.objects.filter(event=event_obj, code=str(talk_id)).first()
-            if not submission:
+                if not submission and str(talk_id).isdigit():
+                    submission = Submission.objects.filter(event=event_obj, id=int(talk_id)).first()
+                if not submission and str(talk_id).isdigit():
+                    talk_slot = TalkSlot.objects.filter(submission__event_id=event_obj.id, id=int(talk_id)).select_related("submission").first()
+                    if talk_slot:
+                        submission = talk_slot.submission
+            else:
                 submission = Submission.objects.filter(code=str(talk_id)).first()
-
-            if not submission and str(talk_id).isdigit():
-                sub_qs = Submission.objects.filter(id=int(talk_id))
-                if event_obj:
-                    sub_qs = sub_qs.filter(event=event_obj)
-                submission = sub_qs.first()
-
-            if not submission and str(talk_id).isdigit():
-                slot_qs = TalkSlot.objects.filter(id=int(talk_id)).select_related("submission")
-                talk_slot = slot_qs.first()
-                if talk_slot:
-                    submission = talk_slot.submission
+                if not submission and str(talk_id).isdigit():
+                    submission = Submission.objects.filter(id=int(talk_id)).first()
+                if not submission and str(talk_id).isdigit():
+                    talk_slot = TalkSlot.objects.filter(id=int(talk_id)).select_related("submission").first()
+                    if talk_slot:
+                        submission = talk_slot.submission
 
         if submission and not event_obj:
             event_obj = getattr(submission, "event", None)
@@ -164,16 +167,21 @@ def process_talk_approved(
         failed_recipients: list[dict[str, str]] = []
         resolved_talk_id = str(talk_id) if talk_id else str(external_id or submission.code)
 
+        # Resolve remote or local VEditor-scoped event ID
+        target_event_id = str(event_obj.id)
+        try:
+            if hasattr(client, "get_scoped_event_id"):
+                scoped = client.get_scoped_event_id()
+                if scoped:
+                    target_event_id = str(scoped)
+        except Exception as scoped_exc:
+            logger.debug("Could not resolve scoped event ID: %s", scoped_exc)
+
         # If talk_id is non-numeric (e.g. passed from submission code), auto-resolve integer ID via VEditor sync
         if not resolved_talk_id.isdigit():
             try:
                 target_slot = talk_slot or (submission.slots.first() if hasattr(submission, "slots") else None) or submission
-                scoped_event_id = None
-                try:
-                    scoped_event_id = client.get_scoped_event_id()
-                except Exception:
-                    scoped_event_id = getattr(event_obj, "id", None)
-                sync_resp = client.sync_talk(target_slot, event_id=scoped_event_id)
+                sync_resp = client.sync_talk(target_slot, event_id=target_event_id)
                 if isinstance(sync_resp, dict) and "id" in sync_resp:
                     resolved_talk_id = str(sync_resp["id"])
                     logger.info("Resolved VEditor integer talk_id=%s for submission %s", resolved_talk_id, submission.code)
@@ -186,6 +194,13 @@ def process_talk_approved(
                 logger.warning("Speaker %s has no email address, skipping", speaker)
                 continue
 
+            # Idempotency check across retries and duplicate webhooks
+            delivery_key = f"veditor:sent_review:{getattr(event_obj, 'id', '')}:{getattr(submission, 'id', '')}:{speaker_email}"
+            if not force and cache.get(delivery_key):
+                logger.info("Speaker review already dispatched to %s, skipping", speaker_email)
+                sent_recipients.append(speaker_email)
+                continue
+
             display_name = getattr(speaker, "fullname", None) or getattr(speaker, "name", None)
             if not display_name and hasattr(speaker, "get_display_name"):
                 display_name = speaker.get_display_name()
@@ -193,7 +208,7 @@ def process_talk_approved(
 
             try:
                 token = client.request_sso_jwt(
-                    event_id=str(event_obj.id),
+                    event_id=target_event_id,
                     talk_id=resolved_talk_id,
                     role="speaker",
                     email=speaker_email,
@@ -237,6 +252,9 @@ def process_talk_approved(
             )
             msg.attach_alternative(body_html, "text/html")
             msg.send(fail_silently=False)
+
+            if not force:
+                cache.set(delivery_key, True, timeout=86400 * 7)
 
             sent_recipients.append(speaker_email)
             logger.info("Dispatched speaker review magic link for talk %s to %s", resolved_talk_id, speaker_email)

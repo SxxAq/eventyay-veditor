@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.contrib import messages
@@ -96,6 +97,34 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
         return context
 
+    def _display_dispatch_result(self, request, result: Any) -> None:
+        """Render user feedback based on the outcome of process_talk_approved."""
+        if isinstance(result, dict) and result.get("sent_count", 0) > 0:
+            recipients = ", ".join(result.get("recipients", []))
+            messages.success(
+                request,
+                _("Speaker review link has been dispatched to {recipients}.").format(recipients=recipients),
+            )
+        elif isinstance(result, dict) and result.get("failed"):
+            err_msg = result["failed"][0].get("error", "Unknown error")
+            messages.error(
+                request,
+                _("Failed to dispatch speaker review link: {error}").format(error=err_msg),
+            )
+        elif isinstance(result, dict) and result.get("status") == "skipped":
+            messages.warning(
+                request,
+                result.get("message", _("No speakers registered for this talk.")),
+            )
+        elif isinstance(result, dict) and result.get("status") == "error":
+            err_msg = result.get("error", _("Unknown error"))
+            messages.error(
+                request,
+                _("Failed to dispatch speaker review link: {error}").format(error=err_msg),
+            )
+        else:
+            messages.warning(request, _("No speaker review link was dispatched."))
+
     def post(self, request, *args, **kwargs):
         """Handle saving settings or executing talk synchronization and redirect."""
         event = request.event
@@ -106,14 +135,27 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         if action == "save_settings":
             form = VEditorSettingsForm(request.POST, has_existing_key=has_saved_key)
             if form.is_valid():
+                base_url_val = (form.cleaned_data.get("veditor_api_base_url") or "").strip()
+                new_key = (form.cleaned_data.get("veditor_api_key") or "").strip()
+
+                current_url = (event.settings.get("veditor_api_base_url") if hasattr(event, "settings") else None) or ""
+                if current_url and base_url_val:
+                    cur_parsed = urlparse(current_url)
+                    new_parsed = urlparse(base_url_val)
+                    cur_origin = f"{cur_parsed.scheme}://{cur_parsed.netloc}"
+                    new_origin = f"{new_parsed.scheme}://{new_parsed.netloc}"
+                    if cur_origin != new_origin and not new_key:
+                        form.add_error("veditor_api_key", _("A new API key is required when changing the VEditor server origin."))
+                        context = self.get_context_data(**kwargs)
+                        context["form"] = form
+                        return self.render_to_response(context)
+
                 if hasattr(event, "settings"):
-                    base_url_val = (form.cleaned_data.get("veditor_api_base_url") or "").strip()
                     if base_url_val:
                         event.settings.set("veditor_api_base_url", base_url_val.rstrip("/"))
                     elif "veditor_api_base_url" in form.cleaned_data:
                         event.settings.set("veditor_api_base_url", "")
 
-                    new_key = (form.cleaned_data.get("veditor_api_key") or "").strip()
                     if new_key:
                         event.settings.set("veditor_api_key", new_key)
 
@@ -148,25 +190,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                         talk_id=talk_id or external_id,
                         external_id=external_id,
                     )
-                    if isinstance(result, dict) and result.get("sent_count", 0) > 0:
-                        recipients = ", ".join(result.get("recipients", []))
-                        messages.success(
-                            request,
-                            _("Speaker review link has been dispatched to {recipients}.").format(recipients=recipients),
-                        )
-                    elif isinstance(result, dict) and result.get("failed"):
-                        err_msg = result["failed"][0].get("error", "Unknown error")
-                        messages.error(
-                            request,
-                            _("Failed to dispatch speaker review link: {error}").format(error=err_msg),
-                        )
-                    elif isinstance(result, dict) and result.get("status") == "skipped":
-                        messages.warning(
-                            request,
-                            result.get("message", _("No speakers registered for this talk.")),
-                        )
-                    else:
-                        messages.warning(request, _("No speaker review link was dispatched."))
+                    self._display_dispatch_result(request, result)
                     return redirect(
                         reverse(
                             "plugins:veditor:connect",
@@ -182,14 +206,15 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     talk_id=talk_id or external_id,
                     external_id=external_id,
                 )
+                messages.success(request, _("Speaker review link has been queued for dispatch."))
             except Exception:
-                process_talk_approved(
+                result = process_talk_approved(
                     event_id=getattr(event, "id", None),
                     talk_id=talk_id or external_id,
                     external_id=external_id,
                 )
+                self._display_dispatch_result(request, result)
 
-            messages.success(request, _("Speaker review link has been queued for dispatch."))
             return redirect(
                 reverse(
                     "plugins:veditor:connect",

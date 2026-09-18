@@ -475,9 +475,16 @@ def test_webhook_view_method_not_allowed(rf):
     assert res_delete.status_code == 405
 
 
-@pytest.mark.django_db
 def test_tasks_process_talk_approved():
-    result = process_talk_approved(event_id=1, talk_id=99, external_id="EXT-1")
+    with (
+        patch("veditor.tasks.Event.objects.filter") as mock_event_filter,
+        patch("veditor.tasks.Submission.objects.filter") as mock_sub_filter,
+        patch("veditor.tasks.TalkSlot.objects.filter") as mock_slot_filter,
+    ):
+        mock_event_filter.return_value.first.return_value = SimpleNamespace(id=1, slug="event-1")
+        mock_sub_filter.return_value.first.return_value = None
+        mock_slot_filter.return_value.select_related.return_value.first.return_value = None
+        result = process_talk_approved(event_id=1, talk_id=99, external_id="EXT-1")
     assert result["status"] == "error"
     assert result["error"] == "Submission not found"
     assert result["external_id"] == "EXT-1"
