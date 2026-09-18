@@ -54,6 +54,7 @@ class VEditorClient:
         if not resolved_base_url and event is not None:
             resolved_base_url = getattr(settings, "VEDITOR_BASE_URL", None) or os.environ.get("VEDITOR_BASE_URL", "http://localhost:8080")
 
+        self.event = event
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
         self.api_key = api_key or _get_conf("VEDITOR_API_KEY") or os.environ.get("VEDITOR_API_KEY")
 
@@ -99,6 +100,19 @@ class VEditorClient:
         parsed = urlparse(self.base_url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise VEditorConfigError(f"Invalid VEditor base URL '{self.base_url}'. Must start with http:// or https://.")
+
+        hostname = (parsed.hostname or "").lower()
+        is_loopback = hostname in ("localhost", "127.0.0.1", "::1")
+        if parsed.scheme == "http" and not is_loopback:
+            raise VEditorConfigError(
+                f"Insecure HTTP URL '{self.base_url}' is only permitted for loopback addresses (localhost, 127.0.0.1). Production URLs must use HTTPS."
+            )
+
+        allowed = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", None) if getattr(settings, "configured", False) else None
+        if allowed:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if origin not in allowed and parsed.netloc not in allowed and parsed.hostname not in allowed:
+                raise VEditorConfigError(f"The VEditor URL origin '{origin}' is not in VEDITOR_ALLOWED_ORIGINS.")
 
         self.base_url = self.base_url.rstrip("/")
 
@@ -197,13 +211,43 @@ class VEditorClient:
         """Resolve the target event ID in VEditor from the event-scoped API key.
 
         Queries GET /events, which automatically returns the event(s) permitted
-        for the authenticated event-scoped API key.
+        for the authenticated event-scoped API key. Disambiguates if multiple events
+        are returned by matching the associated event's slug or name.
         """
         response_data = self._request("GET", "/events")
         if isinstance(response_data, list) and response_data:
-            first_event = response_data[0]
-            if isinstance(first_event, dict) and "id" in first_event:
-                return int(first_event["id"])
+            if len(response_data) == 1:
+                first_event = response_data[0]
+                if isinstance(first_event, dict) and "id" in first_event:
+                    return int(first_event["id"])
+            elif self.event is not None:
+                event_slug = getattr(self.event, "slug", None)
+                event_name = getattr(self.event, "name", None)
+                matched = []
+                for ev in response_data:
+                    if not isinstance(ev, dict):
+                        continue
+                    ext_id = ev.get("external_id")
+                    ev_name = ev.get("name")
+                    if event_slug and ext_id and str(ext_id) == str(event_slug):
+                        matched.append(ev)
+                    elif event_name and ev_name and str(ev_name) == str(event_name):
+                        matched.append(ev)
+                if len(matched) == 1 and "id" in matched[0]:
+                    return int(matched[0]["id"])
+                if len(matched) > 1:
+                    raise VEditorError(
+                        f"Multiple events matched slug/name for '{event_slug}' in VEditor.",
+                        response_data=response_data,
+                    )
+                raise VEditorError(
+                    f"Multiple events returned by VEditor for API key, and cannot disambiguate for event '{event_slug}'.",
+                    response_data=response_data,
+                )
+            else:
+                first_event = response_data[0]
+                if isinstance(first_event, dict) and "id" in first_event:
+                    return int(first_event["id"])
         raise VEditorError("No event associated with this API key was found in VEditor.", response_data=response_data)
 
     def request_sso_jwt(

@@ -180,6 +180,24 @@ def test_client_init_invalid_base_url():
         VEditorClient(base_url="not-a-valid-url", api_key="some-key")
 
 
+def test_client_init_insecure_http_rejected():
+    with pytest.raises(VEditorConfigError, match="Insecure HTTP URL .* is only permitted for loopback addresses"):
+        VEditorClient(base_url="http://remote.veditor.example.com", api_key="some-key")
+
+
+def test_client_init_loopback_http_allowed():
+    client = VEditorClient(base_url="http://127.0.0.1:8000", api_key="some-key")
+    assert client.base_url == "http://127.0.0.1:8000"
+
+
+def test_client_init_allowed_origins(settings):
+    settings.VEDITOR_ALLOWED_ORIGINS = ["https://trusted.veditor.com"]
+    with pytest.raises(VEditorConfigError, match="not in VEDITOR_ALLOWED_ORIGINS"):
+        VEditorClient(base_url="https://untrusted.veditor.com", api_key="some-key")
+    client = VEditorClient(base_url="https://trusted.veditor.com", api_key="some-key")
+    assert client.base_url == "https://trusted.veditor.com"
+
+
 def test_client_init_missing_api_key():
     with patch.dict("os.environ", {}, clear=True):
         with pytest.raises(VEditorConfigError, match="VEditor API key is not configured"):
@@ -339,6 +357,39 @@ def test_get_scoped_event_id_empty_raises():
         status=200,
     )
     with pytest.raises(VEditorError, match="No event associated"):
+        client.get_scoped_event_id()
+
+
+@responses.activate
+def test_get_scoped_event_id_disambiguates():
+    event = SimpleNamespace(slug="summit-2026", name="FOSSASIA Summit 2026")
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key", event=event)
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[
+            {"id": 10, "external_id": "other-event", "name": "Other"},
+            {"id": 42, "external_id": "summit-2026", "name": "FOSSASIA Summit 2026"},
+        ],
+        status=200,
+    )
+    assert client.get_scoped_event_id() == 42
+
+
+@responses.activate
+def test_get_scoped_event_id_multiple_ambiguous_raises():
+    event = SimpleNamespace(slug="unknown-slug", name="Unknown Event")
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key", event=event)
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[
+            {"id": 10, "external_id": "event-1", "name": "Event 1"},
+            {"id": 20, "external_id": "event-2", "name": "Event 2"},
+        ],
+        status=200,
+    )
+    with pytest.raises(VEditorError, match="cannot disambiguate"):
         client.get_scoped_event_id()
 
 
