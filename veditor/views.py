@@ -149,10 +149,22 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                         external_id=external_id,
                     )
                     if isinstance(result, dict) and result.get("sent_count", 0) > 0:
-                        messages.success(request, _("Speaker review link has been dispatched."))
+                        recipients = ", ".join(result.get("recipients", []))
+                        messages.success(
+                            request,
+                            _("Speaker review link has been dispatched to {recipients}.").format(recipients=recipients),
+                        )
                     elif isinstance(result, dict) and result.get("failed"):
                         err_msg = result["failed"][0].get("error", "Unknown error")
-                        messages.error(request, _("Failed to dispatch speaker review link: {error}").format(error=err_msg))
+                        messages.error(
+                            request,
+                            _("Failed to dispatch speaker review link: {error}").format(error=err_msg),
+                        )
+                    elif isinstance(result, dict) and result.get("status") == "skipped":
+                        messages.warning(
+                            request,
+                            result.get("message", _("No speakers registered for this talk.")),
+                        )
                     else:
                         messages.warning(request, _("No speaker review link was dispatched."))
                     return redirect(
@@ -162,7 +174,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                         )
                     )
                 except Exception as exc:
-                    logger.warning("Direct dispatch in DEBUG mode failed, falling back to celery: %s", exc)
+                    logger.warning("Direct dispatch failed, falling back to celery: %s", exc)
 
             try:
                 process_talk_approved.delay(
