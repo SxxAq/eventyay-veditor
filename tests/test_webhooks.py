@@ -402,7 +402,7 @@ def test_webhook_view_per_event_secret_precedence(rf):
         assert mock_task.delay.called
 
 
-def test_webhook_view_celery_dispatch_failure_does_not_block(rf, webhook_secret):
+def test_webhook_view_celery_dispatch_failure_returns_500(rf, webhook_secret):
     payload = {
         "event": "talk.approved",
         "talk_id": 101,
@@ -426,9 +426,42 @@ def test_webhook_view_celery_dispatch_failure_does_not_block(rf, webhook_secret)
         view = WebhookView.as_view()
         response = view(request)
 
+        assert response.status_code == 500
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Failed to enqueue task" in data["error"]
+
+
+def test_webhook_view_payload_without_event_key_succeeds(rf, webhook_secret):
+    payload = {
+        "talk_id": 101,
+        "event_id": 42,
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings, patch("veditor.webhooks.process_talk_approved") as mock_task:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+
+        view = WebhookView.as_view()
+        response = view(request)
+
         assert response.status_code == 200
         data = json.loads(response.content.decode("utf-8"))
         assert data["status"] == "accepted"
+        mock_task.delay.assert_called_once_with(
+            event_id=42,
+            talk_id=101,
+            external_id=None,
+            raw_payload=payload,
+        )
 
 
 def test_webhook_view_method_not_allowed(rf):

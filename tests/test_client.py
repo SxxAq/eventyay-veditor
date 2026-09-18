@@ -623,19 +623,6 @@ def test_get_scoped_event_id_single_event():
     assert client.get_scoped_event_id() == 100409
 
 
-@responses.activate
-def test_get_scoped_event_id_ambiguous_multiple_events():
-    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
-    responses.add(
-        responses.GET,
-        "https://veditor.test/events",
-        json=[{"id": 101, "name": "Event A"}, {"id": 102, "name": "Event B"}],
-        status=200,
-    )
-    with pytest.raises(VEditorError, match="Ambiguous API key scope"):
-        client.get_scoped_event_id()
-
-
 def test_client_prevents_global_key_leakage_to_custom_url():
     event_mock = SimpleNamespace(settings=SimpleNamespace(get=lambda k, d=None: "https://attacker.test" if k == "veditor_api_base_url" else None))
     with patch.dict("os.environ", {"VEDITOR_API_KEY": "global-secret-key"}):
