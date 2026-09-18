@@ -143,7 +143,7 @@ def test_webhook_view_post_success(rf, webhook_secret):
 
 
 def test_webhook_view_missing_signature_header(rf, webhook_secret):
-    payload = {"talk_id": 101, "event_id": 42}
+    payload = {"talk_id": 101, "event_id": 42, "timestamp": time.time()}
     body = json.dumps(payload).encode("utf-8")
 
     request = rf.post(
@@ -162,8 +162,30 @@ def test_webhook_view_missing_signature_header(rf, webhook_secret):
         assert "Missing X-VEditor-Signature" in data["error"]
 
 
-def test_webhook_view_invalid_signature(rf, webhook_secret):
+def test_webhook_view_missing_timestamp_for_replay(rf, webhook_secret):
     payload = {"talk_id": 101, "event_id": 42}
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Missing required timestamp for replay protection" in data["error"]
+
+
+def test_webhook_view_invalid_signature(rf, webhook_secret):
+    payload = {"talk_id": 101, "event_id": 42, "timestamp": time.time()}
     body = json.dumps(payload).encode("utf-8")
 
     request = rf.post(
@@ -252,7 +274,7 @@ def test_webhook_view_non_object_json(rf, webhook_secret):
 
 
 def test_webhook_view_missing_talk_id(rf, webhook_secret):
-    payload = {"event": "talk.approved", "event_id": 42}
+    payload = {"event": "talk.approved", "event_id": 42, "timestamp": time.time()}
     body = json.dumps(payload).encode("utf-8")
     sig = generate_signature(webhook_secret, body)
 
@@ -270,11 +292,60 @@ def test_webhook_view_missing_talk_id(rf, webhook_secret):
 
         assert response.status_code == 400
         data = json.loads(response.content.decode("utf-8"))
-        assert "Missing required field: talk_id" in data["error"]
+        assert "Missing required fields" in data["error"]
+
+
+def test_webhook_view_missing_event_id(rf, webhook_secret):
+    payload = {"event": "talk.approved", "talk_id": 101, "timestamp": time.time()}
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Missing required fields" in data["error"]
+
+
+def test_webhook_view_unsupported_event_type(rf, webhook_secret):
+    payload = {
+        "event": "talk.deleted",
+        "talk_id": 101,
+        "event_id": 42,
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Unsupported webhook event type" in data["error"]
 
 
 def test_webhook_view_secret_not_configured(rf):
-    payload = {"talk_id": 101, "event_id": 42}
+    payload = {"talk_id": 101, "event_id": 42, "timestamp": time.time()}
     body = json.dumps(payload).encode("utf-8")
 
     request = rf.post(
@@ -294,10 +365,12 @@ def test_webhook_view_secret_not_configured(rf):
         assert "not configured" in data["error"]
 
 
-def test_webhook_view_per_event_secret_fallback(rf):
+def test_webhook_view_per_event_secret_precedence(rf):
     event_secret = "per-event-secret-999"
-    payload = {"talk_id": 101, "event_id": 88}
+    global_secret = "global-secret-111"
+    payload = {"talk_id": 101, "event_id": 88, "timestamp": time.time()}
     body = json.dumps(payload).encode("utf-8")
+    # Signed with event_secret, which should take precedence over global_secret
     sig = generate_signature(event_secret, body)
 
     request = rf.post(
@@ -319,7 +392,7 @@ def test_webhook_view_per_event_secret_fallback(rf):
         patch("eventyay.base.models.Event.objects") as mock_event_mgr,
         patch("veditor.webhooks.process_talk_approved") as mock_task,
     ):
-        mock_settings.VEDITOR_WEBHOOK_SECRET = None
+        mock_settings.VEDITOR_WEBHOOK_SECRET = global_secret
         mock_event_mgr.filter.return_value.first.return_value = mock_event
 
         view = WebhookView.as_view()
@@ -327,6 +400,68 @@ def test_webhook_view_per_event_secret_fallback(rf):
 
         assert response.status_code == 200
         assert mock_task.delay.called
+
+
+def test_webhook_view_celery_dispatch_failure_returns_500(rf, webhook_secret):
+    payload = {
+        "event": "talk.approved",
+        "talk_id": 101,
+        "event_id": 42,
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings, patch("veditor.webhooks.process_talk_approved") as mock_task:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        mock_task.delay.side_effect = Exception("Celery Redis broker offline")
+
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 500
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Failed to enqueue task" in data["error"]
+
+
+def test_webhook_view_payload_without_event_key_succeeds(rf, webhook_secret):
+    payload = {
+        "talk_id": 101,
+        "event_id": 42,
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings, patch("veditor.webhooks.process_talk_approved") as mock_task:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        data = json.loads(response.content.decode("utf-8"))
+        assert data["status"] == "accepted"
+        mock_task.delay.assert_called_once_with(
+            event_id=42,
+            talk_id=101,
+            external_id=None,
+            raw_payload=payload,
+        )
 
 
 def test_webhook_view_method_not_allowed(rf):
