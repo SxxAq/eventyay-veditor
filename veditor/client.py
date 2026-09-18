@@ -260,9 +260,10 @@ class VEditorClient:
                     response_data=response_data,
                 )
             else:
-                first_event = response_data[0]
-                if isinstance(first_event, dict) and "id" in first_event:
-                    return int(first_event["id"])
+                raise VEditorError(
+                    "Ambiguous API key scope: multiple events associated with this key in VEditor.",
+                    response_data=response_data,
+                )
         raise VEditorError("No event associated with this API key was found in VEditor.", response_data=response_data)
 
     def request_sso_jwt(

@@ -185,5 +185,6 @@ class WebhookView(View):
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to enqueue process_talk_approved task: %s", exc)
+            return JsonResponse({"error": "Failed to enqueue task"}, status=500)
 
         return JsonResponse({"status": "accepted"}, status=200)
