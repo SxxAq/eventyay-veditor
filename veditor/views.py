@@ -11,6 +11,7 @@ from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import TemplateView
+from django_scopes import scope
 from eventyay.base.models import TalkSlot
 from eventyay.control.permissions import EventPermissionRequiredMixin
 
@@ -28,29 +29,30 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
     def get_talk_slots(self) -> list[TalkSlot]:
         """Fetch all scheduled and confirmed talk slots for the current active schedule."""
         event = self.request.event
-        schedule = getattr(event, "current_schedule", None) or getattr(event, "wip_schedule", None)
+        with scope(event=event):
+            schedule = getattr(event, "current_schedule", None) or getattr(event, "wip_schedule", None)
 
-        if not schedule:
-            return []
+            if not schedule:
+                return []
 
-        if hasattr(schedule, "scheduled_talks"):
-            slots = list(schedule.scheduled_talks)
-        else:
-            slots = list(schedule.talks.filter(submission__isnull=False).select_related("submission", "room").order_by("start"))
-
-        # Deduplicate by slot occurrence identity to avoid multiples across schedule revisions
-        seen_slot_ids = set()
-        unique_slots = []
-        for slot in slots:
-            slot_id = getattr(slot, "id", None)
-            if slot_id is not None:
-                if slot_id not in seen_slot_ids:
-                    seen_slot_ids.add(slot_id)
-                    unique_slots.append(slot)
+            if hasattr(schedule, "scheduled_talks"):
+                slots = list(schedule.scheduled_talks)
             else:
-                unique_slots.append(slot)
+                slots = list(schedule.talks.filter(submission__isnull=False).select_related("submission", "room").order_by("start"))
 
-        return unique_slots
+            # Deduplicate by slot occurrence identity to avoid multiples across schedule revisions
+            seen_slot_ids = set()
+            unique_slots = []
+            for slot in slots:
+                slot_id = getattr(slot, "id", None)
+                if slot_id is not None:
+                    if slot_id not in seen_slot_ids:
+                        seen_slot_ids.add(slot_id)
+                        unique_slots.append(slot)
+                else:
+                    unique_slots.append(slot)
+
+            return unique_slots
 
     def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
         """Populate template context with event details, talk counts, and settings form."""
