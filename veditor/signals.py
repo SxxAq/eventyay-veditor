@@ -15,8 +15,12 @@ def control_nav_veditor(sender, request=None, **kwargs) -> list[dict]:
     if not request or not getattr(request, "user", None) or not request.user.is_authenticated:
         return []
 
+    organizer = getattr(sender, "organizer", None)
+    if not organizer or not getattr(organizer, "slug", None) or not getattr(sender, "slug", None):
+        return []
+
     if not request.user.has_event_permission(
-        sender.organizer,
+        organizer,
         sender,
         "can_change_event_settings",
         request=request,
@@ -35,7 +39,7 @@ def control_nav_veditor(sender, request=None, **kwargs) -> list[dict]:
             "url": reverse(
                 "plugins:veditor:connect",
                 kwargs={
-                    "organizer": sender.organizer.slug,
+                    "organizer": organizer.slug,
                     "event": sender.slug,
                 },
             ),

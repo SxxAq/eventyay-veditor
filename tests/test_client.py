@@ -175,6 +175,13 @@ def test_client_init_missing_base_url():
             VEditorClient(base_url=None, api_key="some-key")
 
 
+def test_client_init_missing_base_url_with_event_no_fallback():
+    event = SimpleNamespace(slug="summit-2026", name="FOSSASIA Summit 2026")
+    with patch.dict("os.environ", {}, clear=True):
+        with pytest.raises(VEditorConfigError, match="VEditor base URL is not configured"):
+            VEditorClient(base_url=None, api_key="some-key", event=event)
+
+
 def test_client_init_invalid_base_url():
     with pytest.raises(VEditorConfigError, match="Invalid VEditor base URL"):
         VEditorClient(base_url="not-a-valid-url", api_key="some-key")
@@ -390,6 +397,56 @@ def test_get_scoped_event_id_multiple_ambiguous_raises():
         status=200,
     )
     with pytest.raises(VEditorError, match="cannot disambiguate"):
+        client.get_scoped_event_id()
+
+
+@responses.activate
+def test_get_scoped_event_id_external_id_precedence_over_name():
+    # Event matches external_id of event 42, but matches name of event 10.
+    # External ID matching must take strict precedence without triggering ambiguity.
+    event = SimpleNamespace(slug="summit-2026", name="Other Event")
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key", event=event)
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[
+            {"id": 10, "external_id": "other-event", "name": "Other Event"},
+            {"id": 42, "external_id": "summit-2026", "name": "Different Name"},
+        ],
+        status=200,
+    )
+    assert client.get_scoped_event_id() == 42
+
+
+@responses.activate
+def test_get_scoped_event_id_fallback_to_name_when_no_external_id_matches():
+    event = SimpleNamespace(slug="unmatched-slug", name="Target Event")
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key", event=event)
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[
+            {"id": 10, "external_id": "other-event", "name": "Other"},
+            {"id": 88, "external_id": "another-event", "name": "Target Event"},
+        ],
+        status=200,
+    )
+    assert client.get_scoped_event_id() == 88
+
+
+@responses.activate
+def test_get_scoped_event_id_no_event_multiple_raises():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key", event=None)
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[
+            {"id": 10, "name": "Event 1"},
+            {"id": 20, "name": "Event 2"},
+        ],
+        status=200,
+    )
+    with pytest.raises(VEditorError, match="no event context provided to disambiguate"):
         client.get_scoped_event_id()
 
 

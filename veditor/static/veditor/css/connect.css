@@ -152,3 +152,16 @@
 .veditor-guide-text {
     margin-bottom: 16px;
 }
+.veditor-col-code {
+    width: 15%;
+}
+.veditor-col-title {
+    width: 45%;
+}
+.veditor-col-room {
+    width: 20%;
+}
+.veditor-col-start {
+    width: 20%;
+}
+

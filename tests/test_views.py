@@ -104,6 +104,22 @@ def test_signals_nav_with_permission(event, organizer_user, rf):
     assert reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}) in items[0]["url"]
 
 
+def test_signals_nav_missing_organizer(organizer_user, rf):
+    request = setup_request(rf.get("/"))
+    request.user = organizer_user
+    # Sender without organizer
+    sender_no_org = SimpleNamespace(slug="event-slug")
+    assert control_nav_veditor(sender=sender_no_org, request=request) == []
+
+    # Sender with organizer but organizer has no slug
+    sender_org_no_slug = SimpleNamespace(slug="event-slug", organizer=SimpleNamespace(slug=None))
+    assert control_nav_veditor(sender=sender_org_no_slug, request=request) == []
+
+    # Sender with organizer but sender has no slug
+    sender_no_event_slug = SimpleNamespace(slug=None, organizer=SimpleNamespace(slug="org-slug"))
+    assert control_nav_veditor(sender=sender_no_event_slug, request=request) == []
+
+
 # ============================================================================
 # Connect View Tests
 # ============================================================================
@@ -295,6 +311,21 @@ def test_talk_slots_published_schedule(event):
     assert slots == [slot1, slot2]
 
 
+def test_talk_slots_scheduled_talks_queryset(event):
+    view = ConnectView()
+    slot = SimpleNamespace(id=1, submission_id=101)
+    mock_qs = MagicMock()
+    mock_qs.filter.return_value.select_related.return_value.order_by.return_value = [slot]
+    event.current_schedule = SimpleNamespace(scheduled_talks=mock_qs)
+    view.request = SimpleNamespace(event=event)
+
+    slots = view.get_talk_slots()
+    assert slots == [slot]
+    mock_qs.filter.assert_called_once_with(submission__isnull=False)
+    mock_qs.filter.return_value.select_related.assert_called_once_with("submission", "room")
+    mock_qs.filter.return_value.select_related.return_value.order_by.assert_called_once_with("start")
+
+
 def test_talk_slots_wip_schedule_fallback(event):
     view = ConnectView()
     event.current_schedule = None
@@ -351,6 +382,23 @@ def test_form_url_validation():
     assert "veditor_api_base_url" in form_insecure.errors
 
 
+def test_form_allowed_origins(settings):
+    from veditor.forms import VEditorSettingsForm
+
+    # Netloc or bare hostname in VEDITOR_ALLOWED_ORIGINS is permitted
+    settings.VEDITOR_ALLOWED_ORIGINS = ["editor.eventyay.com", "custom.domain.org:8443"]
+
+    form_hostname = VEditorSettingsForm(data={"veditor_api_base_url": "https://editor.eventyay.com", "veditor_api_key": "key"})
+    assert form_hostname.is_valid()
+
+    form_netloc = VEditorSettingsForm(data={"veditor_api_base_url": "https://custom.domain.org:8443", "veditor_api_key": "key"})
+    assert form_netloc.is_valid()
+
+    form_unallowed = VEditorSettingsForm(data={"veditor_api_base_url": "https://untrusted.domain.org", "veditor_api_key": "key"})
+    assert not form_unallowed.is_valid()
+    assert "veditor_api_base_url" in form_unallowed.errors
+
+
 def test_form_blank_api_key_handling():
     from veditor.forms import VEditorSettingsForm
 
@@ -391,6 +439,7 @@ def test_connect_view_post_open_studio_action_skips_talk_sync(event, organizer_u
         response = view(request, organizer=event.organizer.slug, event=event.slug)
 
         assert response.status_code == 302
+        assert response.url == f"https://editor.example.com/studio?event_id={event.id}&sso_token=mock_token"
         assert not mock_client.sync_talks.called
         assert mock_client.request_sso_jwt.called
 

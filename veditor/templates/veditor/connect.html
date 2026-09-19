@@ -59,7 +59,7 @@
                         </div>
                     </div>
 
-                    <div class="collapse" id="settingsCollapse">
+                    <div class="collapse{% if form.errors %} in{% endif %}" id="settingsCollapse">
                         <div class="panel panel-default veditor-settings-panel">
                             <div class="panel-body">
                                 <h4 class="veditor-settings-title">{% trans "Update VEditor Credentials" %}</h4>
@@ -172,10 +172,10 @@
                 <table class="table table-striped table-hover veditor-table">
                     <thead>
                         <tr>
-                            <th style="width: 15%;">{% trans "Code" %}</th>
-                            <th style="width: 45%;">{% trans "Title" %}</th>
-                            <th style="width: 20%;">{% trans "Room" %}</th>
-                            <th style="width: 20%;">{% trans "Start Time (UTC)" %}</th>
+                            <th class="veditor-col-code">{% trans "Code" %}</th>
+                            <th class="veditor-col-title">{% trans "Title" %}</th>
+                            <th class="veditor-col-room">{% trans "Room" %}</th>
+                            <th class="veditor-col-start">{% trans "Start Time (UTC)" %}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -210,9 +210,9 @@
             <div class="veditor-card-body veditor-guide-body">
                 <p><strong>{% trans "1. Generate an Event-Scoped API Key:" %}</strong></p>
                 <ol class="veditor-guide-list">
-                    <li>{% trans "Log in to your VEditor instance and open <strong>Events</strong>." %}</li>
-                    <li>{% trans "Click <strong>API Keys</strong> on your target event to generate an API key." %}</li>
-                    <li>{% trans "Paste the API key into this form and save." %}</li>
+                    <li>{% blocktrans trimmed %}Log in to your VEditor instance and open <strong>Events</strong>.{% endblocktrans %}</li>
+                    <li>{% blocktrans trimmed %}Click <strong>API Keys</strong> on your target event to generate an API key.{% endblocktrans %}</li>
+                    <li>{% blocktrans trimmed %}Paste the API key into this form and save.{% endblocktrans %}</li>
                 </ol>
                 <p><strong>{% trans "2. Zero-Config Target Event:" %}</strong></p>
                 <p class="text-muted veditor-guide-text">

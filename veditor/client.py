@@ -51,8 +51,6 @@ class VEditorClient:
             or os.environ.get("VEDITOR_API_BASE_URL")
             or os.environ.get("VEDITOR_BASE_URL")
         )
-        if not resolved_base_url and event is not None:
-            resolved_base_url = getattr(settings, "VEDITOR_BASE_URL", None) or os.environ.get("VEDITOR_BASE_URL", "http://localhost:8080")
 
         self.event = event
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
@@ -212,7 +210,7 @@ class VEditorClient:
 
         Queries GET /events, which automatically returns the event(s) permitted
         for the authenticated event-scoped API key. Disambiguates if multiple events
-        are returned by matching the associated event's slug or name.
+        are returned by matching the associated event's external_id/slug or name.
         """
         response_data = self._request("GET", "/events")
         if isinstance(response_data, list) and response_data:
@@ -220,34 +218,58 @@ class VEditorClient:
                 first_event = response_data[0]
                 if isinstance(first_event, dict) and "id" in first_event:
                     return int(first_event["id"])
-            elif self.event is not None:
+
+            if self.event is not None:
                 event_slug = getattr(self.event, "slug", None)
+                event_id = getattr(self.event, "id", None)
                 event_name = getattr(self.event, "name", None)
-                matched = []
+
+                # Pass 1: Strict match against external_id (slug or ID)
+                slug_matched = []
                 for ev in response_data:
                     if not isinstance(ev, dict):
                         continue
                     ext_id = ev.get("external_id")
-                    ev_name = ev.get("name")
-                    if event_slug and ext_id and str(ext_id) == str(event_slug):
-                        matched.append(ev)
-                    elif event_name and ev_name and str(ev_name) == str(event_name):
-                        matched.append(ev)
-                if len(matched) == 1 and "id" in matched[0]:
-                    return int(matched[0]["id"])
-                if len(matched) > 1:
+                    if ext_id is not None and (
+                        (event_slug is not None and str(ext_id) == str(event_slug)) or (event_id is not None and str(ext_id) == str(event_id))
+                    ):
+                        slug_matched.append(ev)
+
+                if len(slug_matched) == 1 and "id" in slug_matched[0]:
+                    return int(slug_matched[0]["id"])
+                if len(slug_matched) > 1:
                     raise VEditorError(
-                        f"Multiple events matched slug/name for '{event_slug}' in VEditor.",
+                        f"Multiple events matched external_id for '{event_slug}' in VEditor.",
                         response_data=response_data,
                     )
+
+                # Pass 2: Secondary fallback match by exact name if no external_id matched
+                name_matched = []
+                for ev in response_data:
+                    if not isinstance(ev, dict):
+                        continue
+                    ev_name = ev.get("name")
+                    if event_name and ev_name and str(ev_name) == str(event_name):
+                        name_matched.append(ev)
+
+                if len(name_matched) == 1 and "id" in name_matched[0]:
+                    return int(name_matched[0]["id"])
+                if len(name_matched) > 1:
+                    raise VEditorError(
+                        f"Multiple events matched name '{event_name}' in VEditor.",
+                        response_data=response_data,
+                    )
+
                 raise VEditorError(
                     f"Multiple events returned by VEditor for API key, and cannot disambiguate for event '{event_slug}'.",
                     response_data=response_data,
                 )
-            else:
-                first_event = response_data[0]
-                if isinstance(first_event, dict) and "id" in first_event:
-                    return int(first_event["id"])
+
+            raise VEditorError(
+                "Multiple events returned by VEditor API key but no event context provided to disambiguate.",
+                response_data=response_data,
+            )
+
         raise VEditorError("No event associated with this API key was found in VEditor.", response_data=response_data)
 
     def request_sso_jwt(

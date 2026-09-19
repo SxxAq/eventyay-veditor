@@ -63,7 +63,7 @@ class VEditorSettingsForm(forms.Form):
         allowed = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", None)
         if allowed:
             origin = f"{parsed.scheme}://{parsed.netloc}"
-            if origin not in allowed:
+            if origin not in allowed and parsed.netloc not in allowed and hostname not in allowed:
                 raise forms.ValidationError(_("The VEditor URL origin is not in the allowed list."))
 
         return url.rstrip("/")

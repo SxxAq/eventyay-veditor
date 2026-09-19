@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import urlencode
 
 from django.contrib import messages
 from django.http import HttpResponseRedirect
@@ -36,9 +37,15 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                 return []
 
             if hasattr(schedule, "scheduled_talks"):
-                slots = list(schedule.scheduled_talks)
-            else:
+                talks_qs = schedule.scheduled_talks
+                if hasattr(talks_qs, "filter"):
+                    slots = list(talks_qs.filter(submission__isnull=False).select_related("submission", "room").order_by("start"))
+                else:
+                    slots = list(talks_qs)
+            elif hasattr(schedule, "talks"):
                 slots = list(schedule.talks.filter(submission__isnull=False).select_related("submission", "room").order_by("start"))
+            else:
+                slots = []
 
             # Deduplicate by slot occurrence identity to avoid multiples across schedule revisions
             seen_slot_ids = set()
@@ -170,7 +177,8 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             # VEditor immediately consumes it, exchanges it for an HttpOnly cookie, and issues
             # an HTTP 303 redirect that strips the token parameter from the browser URL,
             # mitigating exposure in browser history and logs.
-            redirect_url = f"{client.base_url}/studio?event_id={target_event_id}&sso_token={token}"
+            query_params = urlencode({"event_id": str(target_event_id), "sso_token": token})
+            redirect_url = f"{client.base_url}/studio?{query_params}"
             return HttpResponseRedirect(redirect_url)
         except (VEditorError, ValueError) as exc:
             messages.error(
