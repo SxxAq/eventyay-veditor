@@ -177,6 +177,7 @@
                             <th class="veditor-col-title">{% trans "Title" %}</th>
                             <th class="veditor-col-room">{% trans "Room" %}</th>
                             <th class="veditor-col-start">{% trans "Start Time (UTC)" %}</th>
+                            <th class="veditor-col-action">{% trans "Speaker Review" %}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -191,6 +192,17 @@
                                 {% else %}
                                     —
                                 {% endif %}
+                            </td>
+                            <td class="text-right">
+                                <form method="post" action="" class="veditor-table-action-form">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="resend_speaker_link">
+                                    <input type="hidden" name="talk_id" value="{{ slot.submission.code|default:slot.id }}">
+                                    <input type="hidden" name="external_id" value="{{ slot.submission.code|default:slot.id }}">
+                                    <button type="submit" class="btn btn-default btn-xs" title="{% trans 'Dispatch single sign-on review link to confirmed talk speakers' %}">
+                                        <i class="fa fa-envelope-o"></i> {% trans "Send Email" %}
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                         {% endfor %}
