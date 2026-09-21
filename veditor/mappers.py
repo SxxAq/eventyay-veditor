@@ -109,9 +109,21 @@ def serialize_talks(talk_slots: list[Any], event_id: str | None = None) -> list[
     seen = set()
     for slot in talk_slots:
         data = serialize_talk(slot, event_id=event_id)
-        # Deduplicate per slot occurrence using external_id (or title) and start time
-        identifier = data.get("external_id") or data.get("title")
-        key = (data.get("event_id"), identifier, data.get("start"))
+        # Deduplicate per slot occurrence with distinct namespaces to prevent collisions
+        # and ensure simultaneous breakout sessions across different rooms are preserved
+        ext_id = data.get("external_id")
+        if ext_id:
+            key = (data.get("event_id"), "ext", str(ext_id), data.get("start"))
+        else:
+            slot_id = getattr(slot, "id", None) if not isinstance(slot, dict) else slot.get("id")
+            key = (
+                data.get("event_id"),
+                "title",
+                str(data.get("title")),
+                data.get("room"),
+                str(slot_id) if slot_id is not None else None,
+                data.get("start"),
+            )
         if key not in seen:
             seen.add(key)
             serialized.append(data)

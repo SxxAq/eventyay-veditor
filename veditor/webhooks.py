@@ -125,19 +125,22 @@ class WebhookView(View):
         if not isinstance(payload, dict):
             return JsonResponse({"error": "Payload must be a JSON object"}, status=400)
 
-        # Extract timestamp from payload body or signature header
-        payload_ts = parse_timestamp(payload.get("timestamp"))
-        if payload_ts is None and signature_header and ("t=" in signature_header or "," in signature_header):
+        # Extract timestamp: prioritize signature header timestamp (bound cryptographically in v1 scheme)
+        # and fall back to payload body timestamp for raw body schemes
+        header_ts = None
+        if signature_header and ("t=" in signature_header or "," in signature_header):
             parts = {k.strip(): v.strip() for part in signature_header.split(",") if "=" in part for k, v in [part.split("=", 1)]}
             if "t" in parts:
-                payload_ts = parse_timestamp(parts["t"])
+                header_ts = parse_timestamp(parts["t"])
+
+        effective_ts = header_ts if header_ts is not None else parse_timestamp(payload.get("timestamp"))
 
         # Replay attack mitigation: Require a valid signed timestamp within tolerance
-        if payload_ts is None:
+        if effective_ts is None:
             return JsonResponse({"error": "Missing required timestamp for replay protection"}, status=400)
 
         current_time = time.time()
-        if abs(current_time - payload_ts) > TIMESTAMP_TOLERANCE_SECONDS:
+        if abs(current_time - effective_ts) > TIMESTAMP_TOLERANCE_SECONDS:
             return JsonResponse(
                 {"error": "Webhook timestamp expired or clock skew exceeds tolerance"},
                 status=400,
@@ -146,7 +149,7 @@ class WebhookView(View):
         # Resolve webhook shared secret: event-scoped secret takes precedence
         secret = None
         event_id = payload.get("event_id")
-        if event_id:
+        if event_id is not None and event_id != "":
             try:
                 from eventyay.base.models import Event
 
@@ -169,7 +172,7 @@ class WebhookView(View):
             return JsonResponse({"error": "Webhook secret not configured on server"}, status=500)
 
         # Authenticate signature
-        if not verify_hmac_signature(raw_body, signature_header, secret, timestamp=payload_ts):
+        if not verify_hmac_signature(raw_body, signature_header, secret, timestamp=effective_ts):
             return JsonResponse({"error": "Invalid webhook signature"}, status=401)
 
         # Extract and validate event signal details
@@ -180,7 +183,7 @@ class WebhookView(View):
         talk_id = payload.get("talk_id")
         external_id = payload.get("external_id")
 
-        if not talk_id or not event_id:
+        if talk_id is None or talk_id == "" or event_id is None or event_id == "":
             return JsonResponse({"error": "Missing required fields: event_id and talk_id"}, status=400)
 
         # Asynchronously dispatch supported events

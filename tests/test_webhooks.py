@@ -541,6 +541,94 @@ def test_webhook_view_method_not_allowed(rf):
     assert res_delete.status_code == 405
 
 
+def test_webhook_view_prioritizes_header_timestamp_for_replay_skew(rf, webhook_secret):
+    now_ts = int(time.time())
+    expired_ts = now_ts - 500  # 500s ago
+    payload = {
+        "talk_id": 101,
+        "event_id": 42,
+        "timestamp": datetime.now(UTC).isoformat(),  # fresh timestamp in body
+    }
+    body = json.dumps(payload).encode("utf-8")
+    signed_payload = f"{expired_ts}.".encode() + body
+    v1_sig = hmac.new(webhook_secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    header = f"t={expired_ts}, v1={v1_sig}"
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=header,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        # Must reject because header timestamp is expired, despite body timestamp being fresh
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "timestamp expired" in data["error"]
+
+
+def test_webhook_view_accepts_integer_zero_talk_and_event_id(rf, webhook_secret):
+    payload = {
+        "talk_id": 0,
+        "event_id": 0,
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings, patch("veditor.webhooks.process_talk_approved") as mock_task:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        assert mock_task.delay.called
+        mock_task.delay.assert_called_once_with(
+            event_id=0,
+            talk_id=0,
+            external_id=None,
+            raw_payload=payload,
+        )
+
+
+def test_webhook_view_non_trailing_slash_url(rf, webhook_secret):
+    payload = {
+        "talk_id": 101,
+        "event_id": 42,
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    # Directly hit non-trailing slash path
+    request = rf.post(
+        "/api/v1/veditor/webhook",
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings, patch("veditor.webhooks.process_talk_approved") as mock_task:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        assert mock_task.delay.called
+
+
 def test_tasks_process_talk_approved():
     result = process_talk_approved(event_id=1, talk_id=99, external_id="EXT-1")
     assert result["status"] == "success"

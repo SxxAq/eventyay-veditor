@@ -14,6 +14,10 @@ urlpatterns = [
         name="connect",
     ),
     path(
+        "api/v1/veditor/webhook",
+        webhooks.WebhookView.as_view(),
+    ),
+    path(
         "api/v1/veditor/webhook/",
         webhooks.WebhookView.as_view(),
         name="webhook",
