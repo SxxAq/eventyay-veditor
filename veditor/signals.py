@@ -47,3 +47,20 @@ def control_nav_veditor(sender, request=None, **kwargs) -> list[dict]:
             "icon": "video-camera",
         }
     ]
+
+
+try:
+    from eventyay.agenda.signals import register_recording_provider
+except ImportError:
+    register_recording_provider = None
+
+from .recording import VEditorRecordingProvider
+
+if register_recording_provider is not None:
+
+    @receiver(register_recording_provider, dispatch_uid="veditor_recording_provider")
+    def agenda_recording_veditor(sender, **kwargs) -> VEditorRecordingProvider | None:
+        """Register the VEditor recording provider for public talk schedules."""
+        if hasattr(sender, "plugins") and "veditor" not in sender.plugins:
+            return None
+        return VEditorRecordingProvider(sender)

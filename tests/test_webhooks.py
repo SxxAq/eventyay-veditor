@@ -8,13 +8,13 @@ import json
 import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from django.test import RequestFactory
 from django.urls import reverse
 
-from veditor.tasks import process_talk_approved
+from veditor.tasks import process_talk_approved, process_talk_published
 from veditor.webhooks import WebhookView, parse_timestamp, verify_hmac_signature
 
 
@@ -665,3 +665,175 @@ def test_tasks_process_talk_approved():
     assert result["event_id"] == 1
     assert result["talk_id"] == 99
     assert result["external_id"] == "EXT-1"
+
+
+def test_webhook_view_talk_published_success(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "video_url": "https://cdn.eventyay.com/talks/ABCDE.mp4",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings, patch("veditor.webhooks.process_talk_published") as mock_task:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        assert mock_task.delay.called
+        mock_task.delay.assert_called_once_with(
+            event_id=10,
+            talk_id=42,
+            video_url="https://cdn.eventyay.com/talks/ABCDE.mp4",
+            external_id="ABCDE",
+            raw_payload=payload,
+        )
+
+
+def test_webhook_view_talk_published_missing_video_url(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "video_url" in data["error"]
+
+
+def test_webhook_view_talk_published_empty_video_url(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "video_url": "   ",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "video_url" in data["error"]
+
+
+def test_tasks_process_talk_published_empty_video_url():
+    result = process_talk_published(event_id=1, talk_id=42, video_url="")
+    assert result["status"] == "error"
+    assert "video_url" in result["message"]
+
+
+def test_tasks_process_talk_published_submission_not_found():
+    with (
+        patch("eventyay.base.models.Event.objects.filter") as mock_event_filter,
+        patch("eventyay.base.models.Submission.objects.filter") as mock_sub_filter,
+        patch("eventyay.base.models.TalkSlot.objects.filter") as mock_slot_filter,
+    ):
+        mock_event_filter.return_value.first.return_value = None
+        mock_sub_filter.return_value.first.return_value = None
+        mock_slot_filter.return_value.first.return_value = None
+        mock_slot_filter.return_value.select_related.return_value.first.return_value = None
+
+        result = process_talk_published(
+            event_id="demo",
+            talk_id=99,
+            external_id="NONEXISTENT",
+            video_url="https://example.com/video.mp4",
+        )
+        assert result["status"] == "not_found"
+
+
+def test_tasks_process_talk_published_submission_do_not_record():
+    mock_sub = MagicMock()
+    mock_sub.code = "ABC12"
+    mock_sub.do_not_record = True
+
+    with (
+        patch("eventyay.base.models.Event.objects.filter") as mock_event_filter,
+        patch("eventyay.base.models.Submission.objects.filter") as mock_sub_filter,
+    ):
+        mock_event_filter.return_value.first.return_value = None
+        mock_sub_filter.return_value.first.return_value = mock_sub
+
+        result = process_talk_published(
+            event_id=1,
+            talk_id=99,
+            external_id="ABC12",
+            video_url="https://example.com/video.mp4",
+        )
+        assert result["status"] == "skipped"
+        assert result["reason"] == "do_not_record"
+
+
+def test_tasks_process_talk_published_success_via_external_id():
+    mock_sub = MagicMock()
+    mock_sub.code = "CONF1"
+    mock_sub.do_not_record = False
+
+    mock_resource = MagicMock()
+    mock_resource.id = 555
+
+    with (
+        patch("eventyay.base.models.Event.objects.filter") as mock_event_filter,
+        patch("eventyay.base.models.Submission.objects.filter") as mock_sub_filter,
+        patch("eventyay.base.models.Resource.objects.update_or_create") as mock_res_create,
+    ):
+        mock_event_filter.return_value.first.return_value = None
+        mock_sub_filter.return_value.first.return_value = mock_sub
+        mock_res_create.return_value = (mock_resource, True)
+
+        result = process_talk_published(
+            event_id=1,
+            talk_id=99,
+            external_id="CONF1",
+            video_url="https://cdn.example.com/video.mp4",
+        )
+        assert result["status"] == "success"
+        assert result["submission_code"] == "CONF1"
+        assert result["resource_id"] == 555
+        assert result["created"] is True
+        mock_res_create.assert_called_once_with(
+            submission=mock_sub,
+            description="Video Recording",
+            defaults={"link": "https://cdn.example.com/video.mp4", "kind": "generic"},
+        )
