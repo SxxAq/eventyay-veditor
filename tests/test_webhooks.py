@@ -468,6 +468,36 @@ def test_webhook_view_event_scoped_secret_with_numeric_slug(rf):
         assert mock_task.delay.called
 
 
+def test_webhook_view_event_lookup_db_error_returns_500(rf, webhook_secret):
+    payload = {"talk_id": 101, "event_id": 42, "timestamp": time.time()}
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    from django.db import DatabaseError
+
+    with (
+        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
+        patch("veditor.webhooks.process_talk_approved") as mock_task,
+    ):
+        mock_event_mgr.filter.side_effect = DatabaseError("Database connection timeout")
+
+        view = WebhookView.as_view()
+        response = view(request)
+
+        # Must return 500 so upstream client retries, rather than falling back and returning 401
+        assert response.status_code == 500
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Database error looking up event secret" in data["error"]
+        assert not mock_task.delay.called
+
+
 def test_webhook_view_celery_dispatch_failure_returns_500(rf, webhook_secret):
     payload = {
         "event": "talk.approved",

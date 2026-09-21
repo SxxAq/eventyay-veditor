@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from django.conf import settings
+from django.db import DatabaseError
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.utils.decorators import method_decorator
 from django.views import View
@@ -161,6 +162,9 @@ class WebhookView(View):
 
                 if event_obj and hasattr(event_obj, "settings"):
                     secret = event_obj.settings.get("veditor_webhook_secret")
+            except DatabaseError as exc:
+                logger.error("Database error looking up event-level webhook secret for event %s: %s", event_id, exc)
+                return JsonResponse({"error": "Database error looking up event secret"}, status=500)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Failed looking up event-level webhook secret for event %s: %s", event_id, exc)
 
