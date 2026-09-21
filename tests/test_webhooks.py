@@ -68,6 +68,26 @@ def test_verify_hmac_signature_v1_scheme(webhook_secret):
     assert verify_hmac_signature(body, header, webhook_secret) is True
 
 
+def test_verify_hmac_signature_v1_scheme_with_whitespace(webhook_secret):
+    body = b'{"talk_id": 42, "event_id": 10}'
+    now_ts = int(time.time())
+    signed_payload = f"{now_ts}.".encode() + body
+    v1_sig = hmac.new(webhook_secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    header = f"t={now_ts}, v1={v1_sig}"
+    assert verify_hmac_signature(body, header, webhook_secret) is True
+
+    header_spaces = f" t = {now_ts} , v1 = {v1_sig} "
+    assert verify_hmac_signature(body, header_spaces, webhook_secret) is True
+
+
+def test_verify_hmac_signature_v1_scheme_invalid_sig_no_fallthrough(webhook_secret):
+    body = b'{"talk_id": 42, "event_id": 10}'
+    now_ts = int(time.time())
+    # An invalid v1 signature should be rejected and NOT fall through to raw body HMAC
+    header = f"t={now_ts},v1=invalid_hex_signature"
+    assert verify_hmac_signature(body, header, webhook_secret) is False
+
+
 def test_verify_hmac_signature_wrong_secret(webhook_secret):
     body = b'{"talk_id": 42}'
     sig = generate_signature(webhook_secret, body)
@@ -394,6 +414,52 @@ def test_webhook_view_per_event_secret_precedence(rf):
     ):
         mock_settings.VEDITOR_WEBHOOK_SECRET = global_secret
         mock_event_mgr.filter.return_value.first.return_value = mock_event
+
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        assert mock_task.delay.called
+
+
+def test_webhook_view_event_scoped_secret_with_numeric_slug(rf):
+    event_secret = "event-secret-numeric-slug-999"
+    global_secret = "global-secret-111"
+    # Event slug is '2026' (digits only), while DB id is 42
+    payload = {"talk_id": 101, "event_id": "2026", "timestamp": time.time()}
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(event_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    mock_event = SimpleNamespace(
+        id=42,
+        slug="2026",
+        settings=SimpleNamespace(get=lambda k, d=None: event_secret if k == "veditor_webhook_secret" else d),
+    )
+
+    def mock_filter(*args, **kwargs):
+        # When filtered by id=2026, return empty queryset
+        # When filtered by slug='2026', return mock_event
+        if "id" in kwargs:
+            return SimpleNamespace(first=lambda: None)
+        if "slug" in kwargs and kwargs["slug"] == "2026":
+            return SimpleNamespace(first=lambda: mock_event)
+        return SimpleNamespace(first=lambda: None)
+
+    with (
+        patch("veditor.webhooks.settings") as mock_settings,
+        patch.dict("os.environ", {}, clear=True),
+        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
+        patch("veditor.webhooks.process_talk_approved") as mock_task,
+    ):
+        mock_settings.VEDITOR_WEBHOOK_SECRET = global_secret
+        mock_event_mgr.filter.side_effect = mock_filter
 
         view = WebhookView.as_view()
         response = view(request)

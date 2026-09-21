@@ -65,8 +65,12 @@ def verify_hmac_signature(
     header_ts = None
 
     # Handle t=<timestamp>,v1=<sig> or v1=<sig>
+    parts: dict[str, str] = {}
     if "," in received_sig or "=" in received_sig:
-        parts = dict(part.split("=", 1) for part in received_sig.split(",") if "=" in part)
+        for part in received_sig.split(","):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                parts[k.strip()] = v.strip()
         if "t" in parts:
             header_ts = parse_timestamp(parts["t"])
         if "v1" in parts:
@@ -94,8 +98,7 @@ def verify_hmac_signature(
         ts_str = str(parts.get("t", "")).strip()
         signed_payload = f"{ts_str}.".encode() + raw_body
         expected_sig_ts = hmac.new(secret_bytes, signed_payload, hashlib.sha256).hexdigest()
-        if hmac.compare_digest(expected_sig_ts.lower(), received_sig.lower()):
-            return True
+        return hmac.compare_digest(expected_sig_ts.lower(), received_sig.lower())
 
     # Standard body signature: sha256(raw_body)
     expected_sig = hmac.new(secret_bytes, raw_body, hashlib.sha256).hexdigest()
@@ -125,7 +128,7 @@ class WebhookView(View):
         # Extract timestamp from payload body or signature header
         payload_ts = parse_timestamp(payload.get("timestamp"))
         if payload_ts is None and signature_header and ("t=" in signature_header or "," in signature_header):
-            parts = dict(part.split("=", 1) for part in signature_header.split(",") if "=" in part)
+            parts = {k.strip(): v.strip() for part in signature_header.split(",") if "=" in part for k, v in [part.split("=", 1)]}
             if "t" in parts:
                 payload_ts = parse_timestamp(parts["t"])
 
@@ -147,7 +150,12 @@ class WebhookView(View):
             try:
                 from eventyay.base.models import Event
 
-                event_obj = Event.objects.filter(id=event_id).first() if str(event_id).isdigit() else Event.objects.filter(slug=str(event_id)).first()
+                event_obj = None
+                if str(event_id).isdigit():
+                    event_obj = Event.objects.filter(id=int(event_id)).first()
+                if not event_obj:
+                    event_obj = Event.objects.filter(slug=str(event_id)).first()
+
                 if event_obj and hasattr(event_obj, "settings"):
                     secret = event_obj.settings.get("veditor_webhook_secret")
             except Exception as exc:  # noqa: BLE001
