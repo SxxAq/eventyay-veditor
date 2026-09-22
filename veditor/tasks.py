@@ -249,14 +249,16 @@ def process_talk_approved(
             }
 
             subject = f"[{event_obj.name}] Video Review Ready: {submission.title}"
+            if len(subject) > 200:
+                subject = subject[:197] + "..."
             body_text = render_to_string("veditor/mail/speaker_review.txt", context)
 
             # Dispatch using native Eventyay QueuedMail when available, else fallback to EmailMultiAlternatives
             if QueuedMail is not None:
-                recipient_locale = getattr(speaker, "locale", None) or getattr(event_obj, "locale", None) or "en"
+                recipient_locale = str(getattr(speaker, "locale", None) or getattr(event_obj, "locale", None) or "en")[:32]
                 mail_obj = QueuedMail.objects.create(
                     event=event_obj,
-                    to=speaker_email,
+                    to=str(speaker_email)[:1000],
                     subject=subject,
                     text=body_text,
                     locale=recipient_locale,

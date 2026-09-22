@@ -117,6 +117,8 @@ def mock_tasks_orm(configured_event, submission):
     mock_mails = []
 
     def create_queued_mail(**kwargs):
+        if "subject" in kwargs and len(str(kwargs["subject"])) > 200:
+            raise ValueError("value too long for type character varying(200)")
         m = MagicMock()
         m.kwargs = kwargs
         m.to = kwargs.get("to")
@@ -521,3 +523,25 @@ def test_manual_resend_speaker_link_view_no_talk_selected(configured_event, rf):
 
     assert response.status_code == 302
     mock_delay.assert_not_called()
+
+
+def test_process_talk_approved_long_title_truncates_subject(configured_event, submission, speaker_user, mock_tasks_orm):
+    """Verify that very long submission titles and event names do not exceed QueuedMail 200 char limit."""
+    configured_event.name = "A" * 100
+    submission.title = "B" * 200
+
+    with patch("veditor.tasks.VEditorClient.request_sso_jwt") as mock_jwt:
+        mock_jwt.return_value = "jwt.token"
+
+        result = process_talk_approved(
+            event_id=configured_event.id,
+            talk_id="42",
+            external_id=submission.code,
+            force=True,
+        )
+
+    assert result["status"] == "success"
+    assert len(mock_tasks_orm["queued_mails"]) == 1
+    sent_mail = mock_tasks_orm["queued_mails"][0]
+    assert len(sent_mail.subject) <= 200
+    assert sent_mail.subject.endswith("...")
