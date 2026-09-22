@@ -44,6 +44,9 @@ class VEditorClient:
                 return getattr(settings, name, None)
             return None
 
+        event_has_custom_url = bool(event is not None and hasattr(event, "settings") and event.settings.get("veditor_api_base_url"))
+        event_custom_key = event.settings.get("veditor_api_key") if event is not None and hasattr(event, "settings") else None
+
         resolved_base_url = (
             base_url
             or _get_conf("VEDITOR_API_BASE_URL")
@@ -54,6 +57,24 @@ class VEditorClient:
 
         self.event = event
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
+
+        # Prevent leaking global VEDITOR_API_KEY to unverified custom event URLs
+        if event_has_custom_url and not event_custom_key and not api_key:
+            allowed_raw = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", None)
+            allowed_set: set[str] = set()
+            if isinstance(allowed_raw, str):
+                allowed_set = {o.strip().lower() for o in allowed_raw.split(",") if o.strip()}
+            elif isinstance(allowed_raw, (list, tuple, set)):
+                allowed_set = {str(o).strip().lower() for o in allowed_raw if str(o).strip()}
+
+            parsed_url = urlparse(self.base_url) if self.base_url else None
+            origin = f"{parsed_url.scheme}://{parsed_url.netloc}".lower() if parsed_url and parsed_url.netloc else ""
+            if not allowed_set or origin not in allowed_set:
+                raise VEditorConfigError(
+                    "Cannot use global VEDITOR_API_KEY with a custom unallowlisted event URL. "
+                    "Configure an event-specific API key or add the origin to VEDITOR_ALLOWED_ORIGINS."
+                )
+
         self.api_key = api_key or _get_conf("VEDITOR_API_KEY") or os.environ.get("VEDITOR_API_KEY")
 
         resolved_timeout = timeout if timeout is not None else _get_conf("VEDITOR_REQUEST_TIMEOUT") or os.environ.get("VEDITOR_REQUEST_TIMEOUT")
@@ -108,8 +129,16 @@ class VEditorClient:
 
         allowed = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", None) if getattr(settings, "configured", False) else None
         if allowed:
-            origin = f"{parsed.scheme}://{parsed.netloc}"
-            if origin not in allowed and parsed.netloc not in allowed and parsed.hostname not in allowed:
+            allowed_set: set[str] = set()
+            if isinstance(allowed, str):
+                allowed_set = {o.strip().lower() for o in allowed.split(",") if o.strip()}
+            elif isinstance(allowed, (list, tuple, set)):
+                allowed_set = {str(o).strip().lower() for o in allowed if str(o).strip()}
+
+            origin = f"{parsed.scheme}://{parsed.netloc}".lower()
+            hostname = (parsed.hostname or "").lower()
+            netloc = (parsed.netloc or "").lower()
+            if origin not in allowed_set and netloc not in allowed_set and hostname not in allowed_set:
                 raise VEditorConfigError(f"The VEditor URL origin '{origin}' is not in VEDITOR_ALLOWED_ORIGINS.")
 
         self.base_url = self.base_url.rstrip("/")
