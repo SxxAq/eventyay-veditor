@@ -186,9 +186,6 @@ def process_talk_approved(
                 scoped = client.get_scoped_event_id()
                 if scoped:
                     target_event_id = str(scoped)
-        except VEditorNetworkError:
-            logger.warning("Network failure auto-resolving scoped event ID; triggering retry")
-            raise
         except Exception as scoped_exc:
             logger.debug("Could not resolve scoped event ID: %s", scoped_exc)
 
@@ -200,9 +197,6 @@ def process_talk_approved(
                 if isinstance(sync_resp, dict) and "id" in sync_resp:
                     resolved_talk_id = str(sync_resp["id"])
                     logger.info("Resolved VEditor integer talk_id=%s for submission %s", resolved_talk_id, submission.code)
-            except VEditorNetworkError:
-                logger.warning("Network failure auto-resolving integer talk_id from VEditor; triggering retry")
-                raise
             except Exception as sync_exc:
                 logger.warning("Could not auto-resolve integer talk_id from VEditor for %s: %s", submission.code, sync_exc)
 

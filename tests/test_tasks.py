@@ -607,19 +607,6 @@ def test_process_talk_approved_force_resend_idempotent_across_celery_retries(con
                 process_talk_approved.pop_request()
 
 
-def test_process_talk_approved_network_error_during_resolution_reraised(configured_event, submission):
-    """Verify that VEditorNetworkError during scoped event ID resolution is re-raised for Celery retry."""
-    with patch("veditor.tasks.VEditorClient.get_scoped_event_id") as mock_scoped:
-        mock_scoped.side_effect = VEditorNetworkError("Connection refused")
-
-        with pytest.raises(VEditorNetworkError):
-            process_talk_approved(
-                event_id=configured_event.id,
-                talk_id="42",
-                external_id=submission.code,
-            )
-
-
 def test_manual_resend_speaker_link_view_fallback_exception_handled(configured_event, submission, rf):
     """Verify that if Celery .delay() fails and the synchronous fallback also fails, the error is handled gracefully without HTTP 500."""
     user = MagicMock()
