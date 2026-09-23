@@ -545,3 +545,106 @@ def test_process_talk_approved_long_title_truncates_subject(configured_event, su
     sent_mail = mock_tasks_orm["queued_mails"][0]
     assert len(sent_mail.subject) <= 200
     assert sent_mail.subject.endswith("...")
+
+
+def test_process_talk_approved_speakers_missing_email(configured_event, submission, speaker_user):
+    """Verify that when all speakers have no email address, task returns skipped with missing_email reason."""
+    speaker_user.email = None
+
+    result = process_talk_approved(
+        event_id=configured_event.id,
+        talk_id="42",
+        external_id=submission.code,
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "missing_email"
+    assert "email address" in result["message"]
+    assert result["sent_count"] == 0
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["error"] == "missing_email"
+
+
+def test_process_talk_approved_force_resend_idempotent_across_celery_retries(configured_event, submission, speaker_user, co_speaker_user):
+    """Verify that force=True does not re-send to speakers already dispatched within the same task run/retry."""
+    submission.speakers.all.side_effect = lambda: [speaker_user, co_speaker_user]
+
+    with patch("veditor.tasks.VEditorClient.request_sso_jwt") as mock_jwt:
+        # Speaker 1 succeeds, speaker 2 fails with network error
+        mock_jwt.side_effect = ["jwt.token.speaker1", VEditorNetworkError("Timeout")]
+
+        try:
+            process_talk_approved.push_request(id="celery-retry-task-999")
+        except AttributeError:
+            process_talk_approved.request.id = "celery-retry-task-999"
+
+        try:
+            with pytest.raises(VEditorNetworkError):
+                process_talk_approved(
+                    event_id=configured_event.id,
+                    talk_id="42",
+                    external_id=submission.code,
+                    force=True,
+                )
+
+            # Celery retries the task with the same task ID:
+            # Speaker 1 should now be skipped, speaker 2 now succeeds
+            mock_jwt.side_effect = ["jwt.token.speaker2"]
+            result = process_talk_approved(
+                event_id=configured_event.id,
+                talk_id="42",
+                external_id=submission.code,
+                force=True,
+            )
+
+            assert result["status"] == "success"
+            assert result["sent_count"] == 1
+            assert result["recipients"] == [co_speaker_user.email]
+            assert result["skipped"] == [speaker_user.email]
+        finally:
+            if hasattr(process_talk_approved, "pop_request"):
+                process_talk_approved.pop_request()
+
+
+def test_process_talk_approved_network_error_during_resolution_reraised(configured_event, submission):
+    """Verify that VEditorNetworkError during scoped event ID resolution is re-raised for Celery retry."""
+    with patch("veditor.tasks.VEditorClient.get_scoped_event_id") as mock_scoped:
+        mock_scoped.side_effect = VEditorNetworkError("Connection refused")
+
+        with pytest.raises(VEditorNetworkError):
+            process_talk_approved(
+                event_id=configured_event.id,
+                talk_id="42",
+                external_id=submission.code,
+            )
+
+
+def test_manual_resend_speaker_link_view_fallback_exception_handled(configured_event, submission, rf):
+    """Verify that if Celery .delay() fails and the synchronous fallback also fails, the error is handled gracefully without HTTP 500."""
+    user = MagicMock()
+    user.is_authenticated = True
+    user.has_event_permission.return_value = True
+
+    request = rf.post(
+        reverse("plugins:veditor:connect", kwargs={"organizer": configured_event.organizer.slug, "event": configured_event.slug}),
+        data={
+            "action": "resend_speaker_link",
+            "submission_code": submission.code,
+            "external_id": submission.code,
+        },
+    )
+    request.user = user
+    request.event = configured_event
+    request.organizer = configured_event.organizer
+    setup_request(request)
+
+    with patch("veditor.views.settings.DEBUG", False):
+        with patch("veditor.views.process_talk_approved") as mock_task:
+            mock_task.delay.side_effect = Exception("Broker unreachable")
+            mock_task.side_effect = VEditorError("VEditor service down")
+            view = ConnectView.as_view()
+            response = view(request, organizer=configured_event.organizer.slug, event=configured_event.slug)
+
+    assert response.status_code == 302
+    messages = list(request._messages)
+    assert any("Failed to dispatch speaker review link" in str(m) for m in messages)

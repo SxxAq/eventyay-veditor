@@ -186,6 +186,9 @@ def process_talk_approved(
                 scoped = client.get_scoped_event_id()
                 if scoped:
                     target_event_id = str(scoped)
+        except VEditorNetworkError:
+            logger.warning("Network failure auto-resolving scoped event ID; triggering retry")
+            raise
         except Exception as scoped_exc:
             logger.debug("Could not resolve scoped event ID: %s", scoped_exc)
 
@@ -197,17 +200,33 @@ def process_talk_approved(
                 if isinstance(sync_resp, dict) and "id" in sync_resp:
                     resolved_talk_id = str(sync_resp["id"])
                     logger.info("Resolved VEditor integer talk_id=%s for submission %s", resolved_talk_id, submission.code)
+            except VEditorNetworkError:
+                logger.warning("Network failure auto-resolving integer talk_id from VEditor; triggering retry")
+                raise
             except Exception as sync_exc:
                 logger.warning("Could not auto-resolve integer talk_id from VEditor for %s: %s", submission.code, sync_exc)
+
+        missing_email_speakers: list[str] = []
+        task_id_val = getattr(getattr(self, "request", None), "id", None)
 
         for speaker in speakers:
             speaker_email = getattr(speaker, "email", None)
             if not speaker_email:
-                logger.warning("Speaker %s has no email address, skipping", speaker)
+                speaker_name = getattr(speaker, "fullname", None) or getattr(speaker, "name", None) or str(speaker)
+                logger.warning("Speaker %s has no email address, skipping", speaker_name)
+                missing_email_speakers.append(speaker_name)
                 continue
 
             # Idempotency check across retries and duplicate webhooks
             delivery_key = f"veditor:sent_review:{getattr(event_obj, 'id', '')}:{getattr(submission, 'id', '')}:{speaker_email}"
+            task_sent_key = f"veditor:task_delivery:{task_id_val}:{speaker_email}" if task_id_val else None
+
+            # Prevent duplicate email to already-sent speaker on Celery task retry
+            if task_sent_key and cache.get(task_sent_key):
+                logger.info("Speaker review already dispatched to %s in current task run, skipping", speaker_email)
+                skipped_recipients.append(speaker_email)
+                continue
+
             if not force and cache.get(delivery_key):
                 logger.info("Speaker review already dispatched to %s, skipping", speaker_email)
                 skipped_recipients.append(speaker_email)
@@ -283,11 +302,29 @@ def process_talk_approved(
                 msg.attach_alternative(body_html, "text/html")
                 msg.send(fail_silently=False)
 
-            if not force:
-                cache.set(delivery_key, True, timeout=86400 * 7)
+            if task_sent_key:
+                cache.set(task_sent_key, True, timeout=86400)
+            cache.set(delivery_key, True, timeout=86400 * 7)
 
             sent_recipients.append(speaker_email)
             logger.info("Dispatched speaker review magic link for talk %s to %s", resolved_talk_id, speaker_email)
+
+        for s_name in missing_email_speakers:
+            failed_recipients.append({"speaker": s_name, "error": "missing_email"})
+
+        if not sent_recipients and not skipped_recipients and missing_email_speakers:
+            return {
+                "status": "skipped",
+                "reason": "missing_email",
+                "message": "Registered speaker(s) do not have an email address configured",
+                "event_id": getattr(event_obj, "id", None),
+                "talk_id": resolved_talk_id,
+                "external_id": external_id or submission.code,
+                "sent_count": 0,
+                "recipients": [],
+                "skipped": [],
+                "failed": failed_recipients,
+            }
 
         status_result = "success" if sent_recipients else ("skipped" if skipped_recipients else ("error" if failed_recipients else "skipped"))
         return {

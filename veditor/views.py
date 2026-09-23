@@ -210,13 +210,21 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                 )
                 messages.success(request, _("Speaker review link has been queued for dispatch."))
             except Exception:
-                result = process_talk_approved(
-                    event_id=getattr(event, "id", None),
-                    talk_id=talk_id or external_id,
-                    external_id=external_id,
-                    force=True,
-                )
-                self._display_dispatch_result(request, result)
+                try:
+                    result = process_talk_approved(
+                        event_id=getattr(event, "id", None),
+                        talk_id=talk_id or external_id,
+                        external_id=external_id,
+                        force=True,
+                    )
+                except Exception as exc:
+                    logger.exception("Speaker review dispatch failed: %s", exc)
+                    messages.error(
+                        request,
+                        _("Failed to dispatch speaker review link: {error}").format(error=str(exc)),
+                    )
+                else:
+                    self._display_dispatch_result(request, result)
 
             return redirect(
                 reverse(
