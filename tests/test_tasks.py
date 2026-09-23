@@ -135,6 +135,7 @@ def mock_tasks_orm(configured_event, submission):
         patch("veditor.tasks.Submission.objects.filter") as mock_sub_qs,
         patch("veditor.tasks.TalkSlot.objects.filter") as mock_slot_qs,
         patch("veditor.tasks.QueuedMail.objects.create", side_effect=create_queued_mail) as mock_qm_create,
+        patch("veditor.tasks.VEditorClient.get_scoped_event_id", return_value=configured_event.id),
     ):
 
         def filter_event(**kwargs):
