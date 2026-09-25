@@ -153,15 +153,24 @@
     margin-bottom: 16px;
 }
 .veditor-col-code {
-    width: 15%;
+    width: 12%;
 }
 .veditor-col-title {
-    width: 45%;
+    width: 38%;
 }
 .veditor-col-room {
-    width: 20%;
+    width: 15%;
 }
 .veditor-col-start {
-    width: 20%;
+    width: 15%;
 }
+.veditor-col-action {
+    width: 20%;
+    text-align: right;
+}
+.veditor-table-action-form {
+    display: inline-block;
+    margin: 0;
+}
+
 

@@ -660,8 +660,17 @@ def test_webhook_view_non_trailing_slash_url(rf, webhook_secret):
 
 
 def test_tasks_process_talk_approved():
-    result = process_talk_approved(event_id=1, talk_id=99, external_id="EXT-1")
-    assert result["status"] == "success"
+    with (
+        patch("veditor.tasks.Event.objects.filter") as mock_event_filter,
+        patch("veditor.tasks.Submission.objects.filter") as mock_sub_filter,
+        patch("veditor.tasks.TalkSlot.objects.filter") as mock_slot_filter,
+    ):
+        mock_event_filter.return_value.first.return_value = SimpleNamespace(id=1, slug="event-1")
+        mock_sub_filter.return_value.first.return_value = None
+        mock_slot_filter.return_value.select_related.return_value.first.return_value = None
+        result = process_talk_approved(event_id=1, talk_id=99, external_id="EXT-1")
+    assert result["status"] == "error"
+    assert result["error"] == "Submission not found"
     assert result["event_id"] == 1
     assert result["talk_id"] == 99
     assert result["external_id"] == "EXT-1"
