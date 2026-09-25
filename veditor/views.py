@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 from urllib.parse import urlencode
 
+from django.conf import settings
 from django.contrib import messages
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect
@@ -19,6 +21,9 @@ from eventyay.control.permissions import EventPermissionRequiredMixin
 from .client import VEditorClient
 from .exceptions import VEditorConfigError, VEditorError
 from .forms import VEditorSettingsForm
+from .tasks import process_talk_approved
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectView(EventPermissionRequiredMixin, TemplateView):
@@ -98,6 +103,41 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
         return context
 
+    def _display_dispatch_result(self, request, result: Any) -> None:
+        """Render user feedback based on the outcome of process_talk_approved."""
+        if isinstance(result, dict) and result.get("sent_count", 0) > 0:
+            recipients = ", ".join(result.get("recipients", []))
+            messages.success(
+                request,
+                _("Speaker review link has been dispatched to {recipients}.").format(recipients=recipients),
+            )
+        elif isinstance(result, dict) and result.get("failed"):
+            err_msg = result["failed"][0].get("error", "Unknown error")
+            messages.error(
+                request,
+                _("Failed to dispatch speaker review link: {error}").format(error=err_msg),
+            )
+        elif isinstance(result, dict) and result.get("status") == "skipped":
+            if result.get("skipped"):
+                skipped = ", ".join(result["skipped"])
+                messages.info(
+                    request,
+                    _("Speaker review link was already dispatched to {recipients}.").format(recipients=skipped),
+                )
+            else:
+                messages.warning(
+                    request,
+                    result.get("message", _("No speakers registered for this talk.")),
+                )
+        elif isinstance(result, dict) and result.get("status") == "error":
+            err_msg = result.get("error", _("Unknown error"))
+            messages.error(
+                request,
+                _("Failed to dispatch speaker review link: {error}").format(error=err_msg),
+            )
+        else:
+            messages.warning(request, _("No speaker review link was dispatched."))
+
     def post(self, request, *args, **kwargs):
         """Handle saving settings or executing talk synchronization and redirect."""
         event = request.event
@@ -130,6 +170,68 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                 context = self.get_context_data(**kwargs)
                 context["form"] = form
                 return self.render_to_response(context)
+
+        elif action == "resend_speaker_link":
+            talk_id = request.POST.get("talk_id")
+            external_id = request.POST.get("external_id") or request.POST.get("submission_code")
+            if not external_id and not talk_id:
+                messages.error(request, _("No talk selected for speaker review link dispatch."))
+                return redirect(
+                    reverse(
+                        "plugins:veditor:connect",
+                        kwargs={"organizer": event.organizer.slug, "event": event.slug},
+                    )
+                )
+
+            if getattr(settings, "DEBUG", False):
+                try:
+                    result = process_talk_approved(
+                        event_id=getattr(event, "id", None),
+                        talk_id=talk_id or external_id,
+                        external_id=external_id,
+                        force=True,
+                    )
+                    self._display_dispatch_result(request, result)
+                    return redirect(
+                        reverse(
+                            "plugins:veditor:connect",
+                            kwargs={"organizer": event.organizer.slug, "event": event.slug},
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning("Direct dispatch failed, falling back to celery: %s", exc)
+
+            try:
+                process_talk_approved.delay(
+                    event_id=getattr(event, "id", None),
+                    talk_id=talk_id or external_id,
+                    external_id=external_id,
+                    force=True,
+                )
+                messages.success(request, _("Speaker review link has been queued for dispatch."))
+            except Exception:
+                try:
+                    result = process_talk_approved(
+                        event_id=getattr(event, "id", None),
+                        talk_id=talk_id or external_id,
+                        external_id=external_id,
+                        force=True,
+                    )
+                except Exception as exc:
+                    logger.exception("Speaker review dispatch failed: %s", exc)
+                    messages.error(
+                        request,
+                        _("Failed to dispatch speaker review link: {error}").format(error=str(exc)),
+                    )
+                else:
+                    self._display_dispatch_result(request, result)
+
+            return redirect(
+                reverse(
+                    "plugins:veditor:connect",
+                    kwargs={"organizer": event.organizer.slug, "event": event.slug},
+                )
+            )
 
         # Action: sync talks and launch VEditor, or open studio directly
         talk_slots = self.get_talk_slots()
