@@ -61,6 +61,19 @@ if register_recording_provider is not None:
     @receiver(register_recording_provider, dispatch_uid="veditor_recording_provider")
     def agenda_recording_veditor(sender, **kwargs) -> VEditorRecordingProvider | None:
         """Register the VEditor recording provider for public talk schedules."""
-        if hasattr(sender, "plugins") and "veditor" not in sender.plugins:
-            return None
+        plugin_list = getattr(sender, "plugin_list", None)
+        if isinstance(plugin_list, (list, tuple, set)):
+            if "veditor" not in plugin_list:
+                return None
+        else:
+            plugins = getattr(sender, "plugins", None)
+            if not plugins or not isinstance(plugins, (str, list, tuple, set)):
+                return None
+            if isinstance(plugins, str):
+                active_plugins = [p.strip() for p in plugins.split(",") if p.strip()]
+            else:
+                active_plugins = list(plugins)
+            if "veditor" not in active_plugins:
+                return None
+
         return VEditorRecordingProvider(sender)

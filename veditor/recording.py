@@ -54,10 +54,15 @@ class VEditorRecordingProvider(BaseRecordingProvider):
             return {}
 
         video_url = str(video_url).strip()
+        parsed = urlparse(video_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            logger.warning("Rejected invalid recording URL scheme or netloc: %s", video_url)
+            return {}
+
         escaped_url = html.escape(video_url)
 
         # Direct video files (e.g. mp4, webm, ogg, mov)
-        clean_path = video_url.split("?")[0].lower()
+        clean_path = (parsed.path or "").lower()
         if any(clean_path.endswith(ext) for ext in (".mp4", ".webm", ".ogg", ".mov")):
             iframe = (
                 f'<video controls class="w-100" style="max-width: 100%; border-radius: 4px;" src="{escaped_url}">'
@@ -73,8 +78,7 @@ class VEditorRecordingProvider(BaseRecordingProvider):
                 f"</div>"
             )
 
-        parsed = urlparse(video_url)
-        csp_header = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc and parsed.scheme else ""
+        csp_header = f"{parsed.scheme}://{parsed.netloc}"
 
         return {
             "iframe": iframe,

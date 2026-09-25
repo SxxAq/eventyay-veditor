@@ -120,3 +120,56 @@ def test_agenda_recording_signal_without_plugin():
 
     provider = agenda_recording_veditor(sender=event)
     assert provider is None
+
+
+def test_recording_provider_invalid_scheme_rejected():
+    event = MagicMock()
+    provider = VEditorRecordingProvider(event)
+
+    for bad_url in (
+        "javascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "ftp://example.com/video.mp4",
+        "//example.com/video.mp4",
+        "/relative/path.mp4",
+        "https://",
+    ):
+        submission = MagicMock()
+        submission.do_not_record = False
+        submission.recording_url = bad_url
+        assert provider.get_recording(submission) == {}
+
+
+def test_agenda_recording_signal_with_plugin_list():
+    event = MagicMock()
+    del event.plugins
+    event.plugin_list = ["veditor", "pretalx_pages"]
+
+    provider = agenda_recording_veditor(sender=event)
+    assert isinstance(provider, VEditorRecordingProvider)
+    assert provider.event == event
+
+
+def test_agenda_recording_signal_with_plugins_none():
+    event = MagicMock()
+    event.plugin_list = None
+    event.plugins = None
+
+    provider = agenda_recording_veditor(sender=event)
+    assert provider is None
+
+
+def test_agenda_recording_signal_with_substring_plugin_name():
+    event = MagicMock()
+    del event.plugin_list
+    event.plugins = "veditor_extra,veditor_extension"
+
+    provider = agenda_recording_veditor(sender=event)
+    assert provider is None
+
+
+def test_agenda_recording_signal_without_plugins_attribute():
+    event = MagicMock(spec=[])
+
+    provider = agenda_recording_veditor(sender=event)
+    assert provider is None

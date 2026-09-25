@@ -10,6 +10,7 @@ import os
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db import DatabaseError
@@ -181,6 +182,9 @@ class WebhookView(View):
 
         # Extract and validate event signal details
         event_type = payload.get("event") or "talk.approved"
+        if event_type == "ping":
+            return JsonResponse({"status": "pong", "message": "Webhook verified"}, status=200)
+
         if event_type not in ("talk.approved", "talk.published"):
             return JsonResponse({"error": f"Unsupported webhook event type: {event_type}"}, status=400)
 
@@ -196,6 +200,13 @@ class WebhookView(View):
             if not raw_url or not isinstance(raw_url, str) or not raw_url.strip():
                 return JsonResponse({"error": "Missing or invalid video_url for talk.published event"}, status=400)
             video_url = raw_url.strip()
+            parsed_video = urlparse(video_url)
+            if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:
+                return JsonResponse({"error": "video_url must be a valid HTTP or HTTPS URL with host"}, status=400)
+
+            if external_id is None or not str(external_id).strip():
+                return JsonResponse({"error": "Missing or invalid external_id for talk.published event"}, status=400)
+            external_id = str(external_id).strip()
 
         # Asynchronously dispatch supported events
         try:

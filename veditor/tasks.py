@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,15 @@ def process_talk_published(
         }
 
     video_url = video_url.strip()
+    parsed_video = urlparse(video_url)
+    if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:
+        logger.warning("Empty or invalid video_url received for talk.published: %r", video_url)
+        return {
+            "status": "error",
+            "message": "Missing or invalid video_url scheme/host",
+            "event_id": event_id,
+            "talk_id": talk_id,
+        }
 
     try:
         from django.db import DatabaseError
@@ -99,36 +109,42 @@ def process_talk_published(
                 except (DatabaseError, RuntimeError) as exc:
                     logger.debug("Database error resolving event %s: %s", event_id, exc)
 
-            # 2. Resolve submission
+            if not event_obj:
+                logger.warning("Event not found for talk.published: event_id=%s", event_id)
+                return {
+                    "status": "not_found",
+                    "message": f"Event {event_id} not found",
+                    "event_id": event_id,
+                    "talk_id": talk_id,
+                    "external_id": external_id,
+                }
+
+            # 2. Resolve submission strictly scoped to event_obj
             submission: Submission | None = None
 
             # Strategy A: by external_id (submission code, id, or slot id)
             if external_id:
                 ext_str = str(external_id).strip()
-                if event_obj:
+                try:
+                    submission = event_obj.submissions.filter(code__iexact=ext_str).first()
+                except (DatabaseError, RuntimeError):
+                    pass
+                if not submission and ext_str.isdigit():
                     try:
-                        submission = event_obj.submissions.filter(code__iexact=ext_str).first()
-                    except (DatabaseError, RuntimeError):
-                        pass
-                if not submission:
-                    try:
-                        submission = Submission.objects.filter(code__iexact=ext_str).first()
+                        submission = event_obj.submissions.filter(id=int(ext_str)).first()
                     except (DatabaseError, RuntimeError):
                         pass
                 if not submission and ext_str.isdigit():
-                    if event_obj:
-                        try:
-                            submission = event_obj.submissions.filter(id=int(ext_str)).first()
-                        except (DatabaseError, RuntimeError):
-                            pass
-                    if not submission:
-                        try:
-                            submission = Submission.objects.filter(id=int(ext_str)).first()
-                        except (DatabaseError, RuntimeError):
-                            pass
-                if not submission and ext_str.isdigit():
                     try:
-                        slot = TalkSlot.objects.filter(id=int(ext_str), submission__isnull=False).select_related("submission").first()
+                        slot = (
+                            TalkSlot.objects.filter(
+                                id=int(ext_str),
+                                submission__event=event_obj,
+                                submission__isnull=False,
+                            )
+                            .select_related("submission")
+                            .first()
+                        )
                         if slot:
                             submission = slot.submission
                     except (DatabaseError, RuntimeError):
@@ -138,19 +154,22 @@ def process_talk_published(
             if not submission and talk_id is not None and str(talk_id).isdigit():
                 talk_int = int(talk_id)
                 try:
-                    slot = TalkSlot.objects.filter(id=talk_int, submission__isnull=False).select_related("submission").first()
+                    slot = (
+                        TalkSlot.objects.filter(
+                            id=talk_int,
+                            submission__event=event_obj,
+                            submission__isnull=False,
+                        )
+                        .select_related("submission")
+                        .first()
+                    )
                     if slot:
                         submission = slot.submission
                 except (DatabaseError, RuntimeError):
                     pass
-                if not submission and event_obj:
-                    try:
-                        submission = event_obj.submissions.filter(id=talk_int).first()
-                    except (DatabaseError, RuntimeError):
-                        pass
                 if not submission:
                     try:
-                        submission = Submission.objects.filter(id=talk_int).first()
+                        submission = event_obj.submissions.filter(id=talk_int).first()
                     except (DatabaseError, RuntimeError):
                         pass
 
@@ -169,6 +188,22 @@ def process_talk_published(
                     "external_id": external_id,
                 }
 
+            # Enforce cross-event tenant isolation
+            sub_event_id = getattr(submission, "event_id", getattr(getattr(submission, "event", None), "id", None))
+            if sub_event_id is not None and sub_event_id != event_obj.id:
+                logger.error(
+                    "Cross-event boundary violation: submission %s belongs to event %s, not %s",
+                    submission.code,
+                    sub_event_id,
+                    event_obj.id,
+                )
+                return {
+                    "status": "error",
+                    "message": "Submission belongs to a different event",
+                    "event_id": event_id,
+                    "talk_id": talk_id,
+                }
+
             # 3. Check do_not_record flag
             if getattr(submission, "do_not_record", False):
                 logger.info(
@@ -181,23 +216,40 @@ def process_talk_published(
                     "submission_code": submission.code,
                 }
 
-            # 4. Update or create Resource
-            resource, created = Resource.objects.update_or_create(
-                submission=submission,
-                description="Video Recording",
-                defaults={
-                    "link": video_url,
-                    "kind": "generic",
-                },
+            # 4. Update or create Resource safely without MultipleObjectsReturned
+            resource = (
+                Resource.objects.filter(
+                    submission=submission,
+                    description__iexact="Video Recording",
+                )
+                .order_by("id")
+                .first()
             )
+            created = False
+            if resource:
+                resource.link = video_url
+                resource.kind = "generic"
+                resource.save(update_fields=["link", "kind"])
+            else:
+                resource = Resource.objects.create(
+                    submission=submission,
+                    description="Video Recording",
+                    link=video_url,
+                    kind="generic",
+                )
+                created = True
 
             # 5. Provide backwards compatibility for recording_url attribute if present
             if hasattr(submission, "recording_url"):
                 submission.recording_url = video_url
                 try:
                     submission.save(update_fields=["recording_url"])
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Failed updating recording_url on submission %s: %s",
+                        getattr(submission, "code", None),
+                        exc,
+                    )
 
             logger.info(
                 "Successfully synced recording URL for submission %s (Resource ID=%s, created=%s)",
