@@ -933,6 +933,21 @@ def test_tasks_process_talk_published_creates_resource_when_none_exists():
         )
 
 
+def test_tasks_process_talk_published_database_error_raises():
+    from django.db import DatabaseError
+
+    with patch("eventyay.base.models.Event.objects.filter") as mock_event_filter:
+        mock_event_filter.side_effect = DatabaseError("Connection reset by peer")
+
+        with pytest.raises(DatabaseError):
+            process_talk_published(
+                event_id=1,
+                talk_id=99,
+                external_id="CONF2",
+                video_url="https://cdn.example.com/video2.mp4",
+            )
+
+
 def test_webhook_view_ping_success(rf, webhook_secret):
     payload = {
         "event": "ping",

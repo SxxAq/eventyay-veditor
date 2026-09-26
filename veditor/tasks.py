@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from django.conf import settings
 from django.core.cache import cache
 from django.core.mail import EmailMultiAlternatives
+from django.db import DatabaseError
 from django.template.loader import render_to_string
 
 try:
@@ -333,7 +334,12 @@ def process_talk_approved(
         }
 
 
-@task_decorator(name="veditor.process_talk_published")
+@task_decorator(
+    name="veditor.process_talk_published",
+    autoretry_for=(DatabaseError,),
+    retry_backoff=True,
+    max_retries=5,
+)
 def process_talk_published(
     event_id: int | str,
     talk_id: int | str,
@@ -374,7 +380,6 @@ def process_talk_published(
         }
 
     try:
-        from django.db import DatabaseError
         from django_scopes import scopes_disabled
         from eventyay.base.models import Event, Resource, TalkSlot
     except ImportError as exc:
@@ -391,13 +396,10 @@ def process_talk_published(
             # 1. Resolve event
             event_obj = None
             if event_id is not None and event_id != "":
-                try:
-                    if str(event_id).isdigit():
-                        event_obj = Event.objects.filter(id=int(event_id)).first()
-                    if not event_obj:
-                        event_obj = Event.objects.filter(slug=str(event_id)).first()
-                except (DatabaseError, RuntimeError) as exc:
-                    logger.debug("Database error resolving event %s: %s", event_id, exc)
+                if str(event_id).isdigit():
+                    event_obj = Event.objects.filter(id=int(event_id)).first()
+                if not event_obj:
+                    event_obj = Event.objects.filter(slug=str(event_id)).first()
 
             if not event_obj:
                 logger.warning("Event not found for talk.published: event_id=%s", event_id)
@@ -415,38 +417,13 @@ def process_talk_published(
             # Strategy A: by external_id (submission code, id, or slot id)
             if external_id:
                 ext_str = str(external_id).strip()
-                try:
-                    submission = event_obj.submissions.filter(code__iexact=ext_str).first()
-                except (DatabaseError, RuntimeError):
-                    pass
+                submission = event_obj.submissions.filter(code__iexact=ext_str).first()
                 if not submission and ext_str.isdigit():
-                    try:
-                        submission = event_obj.submissions.filter(id=int(ext_str)).first()
-                    except (DatabaseError, RuntimeError):
-                        pass
+                    submission = event_obj.submissions.filter(id=int(ext_str)).first()
                 if not submission and ext_str.isdigit():
-                    try:
-                        slot = (
-                            TalkSlot.objects.filter(
-                                id=int(ext_str),
-                                submission__event=event_obj,
-                                submission__isnull=False,
-                            )
-                            .select_related("submission")
-                            .first()
-                        )
-                        if slot:
-                            submission = slot.submission
-                    except (DatabaseError, RuntimeError):
-                        pass
-
-            # Strategy B: by talk_id (if talk_id is numeric)
-            if not submission and talk_id is not None and str(talk_id).isdigit():
-                talk_int = int(talk_id)
-                try:
                     slot = (
                         TalkSlot.objects.filter(
-                            id=talk_int,
+                            id=int(ext_str),
                             submission__event=event_obj,
                             submission__isnull=False,
                         )
@@ -455,13 +432,23 @@ def process_talk_published(
                     )
                     if slot:
                         submission = slot.submission
-                except (DatabaseError, RuntimeError):
-                    pass
+
+            # Strategy B: by talk_id (if talk_id is numeric)
+            if not submission and talk_id is not None and str(talk_id).isdigit():
+                talk_int = int(talk_id)
+                slot = (
+                    TalkSlot.objects.filter(
+                        id=talk_int,
+                        submission__event=event_obj,
+                        submission__isnull=False,
+                    )
+                    .select_related("submission")
+                    .first()
+                )
+                if slot:
+                    submission = slot.submission
                 if not submission:
-                    try:
-                        submission = event_obj.submissions.filter(id=talk_int).first()
-                    except (DatabaseError, RuntimeError):
-                        pass
+                    submission = event_obj.submissions.filter(id=talk_int).first()
 
             if not submission:
                 logger.warning(
@@ -555,6 +542,12 @@ def process_talk_published(
                 "resource_id": resource.id,
                 "created": created,
             }
+    except DatabaseError:
+        logger.warning(
+            "Transient database error processing talk.published for talk_id=%s, retrying...",
+            talk_id,
+        )
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed processing talk.published for talk_id=%s: %s", talk_id, exc)
         return {
