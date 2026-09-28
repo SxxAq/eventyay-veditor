@@ -1030,3 +1030,229 @@ def test_webhook_view_talk_published_invalid_video_url_scheme(rf, webhook_secret
         assert response.status_code == 400
         data = json.loads(response.content.decode("utf-8"))
         assert "video_url must be a valid HTTP or HTTPS URL" in data["error"]
+
+
+def test_webhook_view_talk_published_missing_video_url_key(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Missing or invalid video_url" in data["error"]
+
+
+def test_webhook_view_talk_published_null_video_url(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "video_url": None,
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Missing or invalid video_url" in data["error"]
+
+
+def test_webhook_view_talk_published_whitespace_video_url(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "video_url": "   ",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Missing or invalid video_url" in data["error"]
+
+
+def test_tasks_process_talk_published_none_or_non_string_video_url():
+    res1 = process_talk_published(event_id=1, talk_id=42, video_url=None)
+    assert res1["status"] == "error"
+    assert "Missing or invalid video_url" in res1["message"]
+
+    res2 = process_talk_published(event_id=1, talk_id=42, video_url="   ")
+    assert res2["status"] == "error"
+    assert "Missing or invalid video_url" in res2["message"]
+
+    res3 = process_talk_published(event_id=1, talk_id=42, video_url=12345)
+    assert res3["status"] == "error"
+    assert "Missing or invalid video_url" in res3["message"]
+
+
+def test_tasks_process_talk_published_duplicate_events_query():
+    """Verify that if multiple events match in Event.objects.filter, .first() prevents MultipleObjectsReturned."""
+    mock_event1 = MagicMock()
+    mock_event1.id = 1
+    mock_sub = MagicMock()
+    mock_sub.code = "DUPTALK"
+    mock_sub.event_id = 1
+    mock_sub.do_not_record = False
+    mock_event1.submissions.filter.return_value.first.return_value = mock_sub
+
+    mock_res = MagicMock()
+    mock_res.id = 101
+
+    with (
+        patch("eventyay.base.models.Event.objects.filter") as mock_event_filter,
+        patch("eventyay.base.models.Resource.objects.filter") as mock_res_filter,
+    ):
+        # Even with duplicate events in queryset, .first() returns the primary match
+        mock_event_filter.return_value.first.return_value = mock_event1
+        mock_res_filter.return_value.order_by.return_value.first.return_value = mock_res
+
+        result = process_talk_published(
+            event_id="demo-event",
+            talk_id=42,
+            external_id="DUPTALK",
+            video_url="https://cdn.example.com/talk.mp4",
+        )
+        assert result["status"] == "success"
+        assert result["resource_id"] == 101
+
+
+def test_tasks_process_talk_published_idempotent_public_schedule_updates():
+    """Verify idempotent updates to the public schedule: repeated deliveries update existing resource and schedule HTML."""
+    from veditor.recording import VEditorRecordingProvider
+
+    mock_event = MagicMock()
+    mock_event.id = 1
+
+    # Simulate submission
+    mock_sub = MagicMock()
+    mock_sub.code = "SCHEDULE1"
+    mock_sub.event_id = 1
+    mock_sub.do_not_record = False
+    mock_sub.recording_url = None
+
+    class MockResource:
+        def __init__(self, id, submission, description, link, kind="generic"):
+            self.id = id
+            self.submission = submission
+            self.description = description
+            self.link = link
+            self.kind = kind
+
+        def save(self, update_fields=None):
+            pass
+
+    existing_resources = []
+
+    def mock_filter_res(*args, **kwargs):
+        mock_qs = MagicMock()
+        matched = [r for r in existing_resources if r.description.lower() == "video recording"]
+        mock_qs.order_by.return_value.first.side_effect = lambda: matched[0] if matched else None
+        return mock_qs
+
+    def mock_create_res(*args, **kwargs):
+        new_res = MockResource(id=888, submission=kwargs["submission"], description=kwargs["description"], link=kwargs["link"])
+        existing_resources.append(new_res)
+        return new_res
+
+    mock_event.submissions.filter.return_value.first.return_value = mock_sub
+
+    with (
+        patch("eventyay.base.models.Event.objects.filter") as mock_event_filter,
+        patch("eventyay.base.models.Resource.objects.filter", side_effect=mock_filter_res),
+        patch("eventyay.base.models.Resource.objects.create", side_effect=mock_create_res),
+    ):
+        mock_event_filter.return_value.first.return_value = mock_event
+
+        # 1. First webhook delivery
+        res1 = process_talk_published(
+            event_id=1,
+            talk_id=50,
+            external_id="SCHEDULE1",
+            video_url="https://cdn.example.com/recording_v1.mp4",
+        )
+        assert res1["status"] == "success"
+        assert res1["created"] is True
+        assert res1["resource_id"] == 888
+        assert len(existing_resources) == 1
+
+        # Check schedule rendering with recording provider
+        provider = VEditorRecordingProvider(mock_event)
+        rec1 = provider.get_recording(mock_sub)
+        assert "recording_v1.mp4" in rec1["iframe"]
+        assert rec1["csp_header"] == "https://cdn.example.com"
+
+        # 2. Duplicate webhook delivery (same payload)
+        res2 = process_talk_published(
+            event_id=1,
+            talk_id=50,
+            external_id="SCHEDULE1",
+            video_url="https://cdn.example.com/recording_v1.mp4",
+        )
+        assert res2["status"] == "success"
+        assert res2["created"] is False  # Idempotent: no new resource created!
+        assert res2["resource_id"] == 888
+        assert len(existing_resources) == 1
+
+        # 3. Subsequent webhook delivery with updated video URL
+        res3 = process_talk_published(
+            event_id=1,
+            talk_id=50,
+            external_id="SCHEDULE1",
+            video_url="https://cdn.example.com/recording_v2.mp4",
+        )
+        assert res3["status"] == "success"
+        assert res3["created"] is False  # Still single resource
+        assert res3["resource_id"] == 888
+        assert len(existing_resources) == 1
+        assert existing_resources[0].link == "https://cdn.example.com/recording_v2.mp4"
+
+        # Public schedule now renders updated recording URL
+        rec3 = provider.get_recording(mock_sub)
+        assert "recording_v2.mp4" in rec3["iframe"]

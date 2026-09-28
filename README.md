@@ -41,6 +41,39 @@ A plugin for [eventyay](https://github.com/fossasia/eventyay) that integrates [V
 
 When using the Eventyay Docker development setup, you can also clone this repository into the gitignored `plugins/` directory at the eventyay repo root so it is installed automatically.
 
+## Webhook Configuration for Organizers
+
+The plugin exposes an inbound webhook receiver to receive pipeline lifecycle events dispatched from VEditor.
+
+### Webhook Endpoint & Authentication
+
+- **Webhook URL**: `https://<your-eventyay-domain>/api/v1/veditor/webhook/`
+- **Secret Configuration**: Configure the shared webhook secret either via:
+  - Environment variable on the Eventyay server: `EVENTYAY_VEDITOR_WEBHOOK_SECRET` (or `VEDITOR_WEBHOOK_SECRET`)
+  - Event settings under **Event Settings -> Plugins -> VEditor** (`veditor_webhook_secret`)
+- **Signature Verification**: Incoming webhook requests from VEditor must provide an HMAC-SHA256 signature in the `X-Veditor-Signature` header:
+  - Supported formats: `sha256=<hex_digest>`, `<hex_digest>`, or timestamped `t=<timestamp>,v1=<hex_digest>`.
+
+### Step-by-Step Organizer Setup in VEditor
+
+1. In your VEditor dashboard, navigate to **Event Settings** for the corresponding event.
+2. In the **Outbound Webhook / API Keys** configuration panel:
+   - Set the **Webhook URL** to `https://<your-eventyay-domain>/api/v1/veditor/webhook/`.
+   - Enter the **Webhook Secret** matching the secret configured in Eventyay.
+   - Click **Test Ping** to dispatch a test `ping` webhook and confirm the endpoint responds with `{"status": "pong"}`.
+   - Click **Save Webhook**.
+3. Once registered, VEditor will automatically notify Eventyay when talk recordings progress through review and publishing.
+
+### Supported Webhook Events
+
+- `talk.approved`:
+  Dispatched when a talk recording is ready for speaker review. Triggers background email delivery of direct SSO review links to the talk's registered speakers.
+- `talk.published`:
+  Dispatched when video processing is finalized and published. Idempotently attaches the recording URL to the talk's resources, updating the public schedule player without creating duplicate resource entries.
+- `ping`:
+  Connectivity and HMAC signature verification test.
+
+
 ## Code Style & Linting
 
 This plugin enforces code style via `pre-commit` running `ruff` (linting + formatting). CI runs these checks automatically on every PR.
