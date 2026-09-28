@@ -22,3 +22,12 @@ def event(db):
 def user(db):
     """Create a test user."""
     return User.objects.create_user(email="tester@example.com", password="secret")
+
+
+@pytest.fixture
+def mock_veditor():
+    """Provides a running MockVEditor service harness."""
+    from tests.mock_veditor import MockVEditor
+
+    with MockVEditor() as mock:
+        yield mock
