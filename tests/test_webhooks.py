@@ -385,6 +385,34 @@ def test_webhook_view_secret_not_configured(rf):
         assert "not configured" in data["error"]
 
 
+def test_webhook_view_eventyay_veditor_webhook_secret_env_fallback(rf):
+    env_secret = "env-secret-eventyay-veditor-777"
+    payload = {"talk_id": 101, "event_id": 88, "timestamp": time.time()}
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(env_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with (
+        patch("veditor.webhooks.settings") as mock_settings,
+        patch.dict("os.environ", {"EVENTYAY_VEDITOR_WEBHOOK_SECRET": env_secret}, clear=True),
+        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
+        patch("veditor.webhooks.process_talk_approved") as mock_task,
+    ):
+        mock_settings.VEDITOR_WEBHOOK_SECRET = None
+        mock_event_mgr.filter.return_value.first.return_value = None
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        mock_task.delay.assert_called_once()
+
+
 def test_webhook_view_per_event_secret_precedence(rf):
     event_secret = "per-event-secret-999"
     global_secret = "global-secret-111"

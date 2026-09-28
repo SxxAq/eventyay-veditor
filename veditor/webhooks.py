@@ -170,7 +170,11 @@ class WebhookView(View):
                 logger.debug("Failed looking up event-level webhook secret for event %s: %s", event_id, exc)
 
         if not secret:
-            secret = getattr(settings, "VEDITOR_WEBHOOK_SECRET", None) or os.environ.get("VEDITOR_WEBHOOK_SECRET")
+            secret = (
+                getattr(settings, "VEDITOR_WEBHOOK_SECRET", None)
+                or os.environ.get("VEDITOR_WEBHOOK_SECRET")
+                or os.environ.get("EVENTYAY_VEDITOR_WEBHOOK_SECRET")
+            )
 
         if not secret:
             logger.error("VEditor webhook secret not configured")

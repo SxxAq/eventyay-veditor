@@ -49,8 +49,9 @@ The plugin exposes an inbound webhook receiver to receive pipeline lifecycle eve
 
 - **Webhook URL**: `https://<your-eventyay-domain>/api/v1/veditor/webhook/`
 - **Secret Configuration**: Configure the shared webhook secret either via:
-  - Environment variable on the Eventyay server: `EVENTYAY_VEDITOR_WEBHOOK_SECRET` (or `VEDITOR_WEBHOOK_SECRET`)
-  - Event settings under **Event Settings -> Plugins -> VEditor** (`veditor_webhook_secret`)
+  - Server environment variable: `VEDITOR_WEBHOOK_SECRET` (or `EVENTYAY_VEDITOR_WEBHOOK_SECRET`)
+  - Django setting in your deployment configuration: `settings.VEDITOR_WEBHOOK_SECRET`
+  - Per-event secret (for dedicated event isolation): provisioned in event settings via `event.settings.set("veditor_webhook_secret", ...)`
 - **Signature Verification**: Incoming webhook requests from VEditor must provide an HMAC-SHA256 signature in the `X-Veditor-Signature` header:
   - Supported formats: `sha256=<hex_digest>`, `<hex_digest>`, or timestamped `t=<timestamp>,v1=<hex_digest>`.
 
