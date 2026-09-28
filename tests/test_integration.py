@@ -344,6 +344,7 @@ def test_integration_scenario_c_talk_published_public_schedule(mock_veditor_serv
         return m
 
     with (
+        patch("veditor.webhooks.process_talk_published") as mock_pub_task,
         patch("eventyay.base.models.Event.objects") as mock_event_mgr,
         patch("eventyay.base.models.Resource.objects.filter") as mock_res_filter,
     ):
@@ -358,14 +359,16 @@ def test_integration_scenario_c_talk_published_public_schedule(mock_veditor_serv
             use_request_factory=True,
         )
         assert response.status_code == 200
-
-        # Step 2: Execute task
-        task_res = process_talk_published(
+        mock_pub_task.delay.assert_called_once_with(
             event_id=integrated_event.id,
             talk_id=55,
-            external_id=submission.code,
             video_url=video_url,
+            external_id=submission.code,
+            raw_payload=payload,
         )
+
+        # Step 2: Execute task
+        task_res = process_talk_published(**mock_pub_task.delay.call_args.kwargs)
         assert task_res["status"] == "success"
         assert task_res["submission_code"] == submission.code
 
