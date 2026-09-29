@@ -64,7 +64,7 @@ namespaces = false
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "eventyay.config.settings"
 testpaths = ["tests"]
-addopts = "--nomigrations --reuse-db"
+addopts = "--nomigrations"
 
 [tool.pytest_env]
 EVY_RUNNING_ENVIRONMENT = "testing"

@@ -78,4 +78,4 @@ jobs:
           EVY_POSTGRES_DB: eventyay-db
         run: |
           . ../eventyay/app/.venv/bin/activate
-          pytest tests --reuse-db
+          pytest tests

@@ -508,11 +508,8 @@ def process_talk_published(
 
             with _safe_atomic():
                 # Lock submission row if persistent to serialize concurrent webhook arrivals
-                if getattr(submission, "pk", None) and isinstance(submission.pk, int) and hasattr(Submission.objects, "select_for_update"):
-                    try:
-                        Submission.objects.select_for_update().filter(pk=submission.pk).first()
-                    except Exception:
-                        pass
+                if isinstance(getattr(submission, "pk", None), int) and hasattr(Submission.objects, "select_for_update"):
+                    Submission.objects.select_for_update().filter(pk=submission.pk).first()
 
                 resource = (
                     Resource.objects.filter(
