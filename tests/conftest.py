@@ -1,7 +1,18 @@
 import pytest
 from django.conf import settings
+from django.db.backends.signals import connection_created
+from django.dispatch import receiver
 from django.utils.timezone import now
 from eventyay.base.models import Event, Organizer, User
+
+
+@receiver(connection_created)
+def setup_postgres_extensions(sender, connection, **kwargs):
+    """Ensure required PostgreSQL extensions exist for models with gin/trigram indexes."""
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS unaccent;")
 
 
 @pytest.fixture(autouse=True, scope="session")

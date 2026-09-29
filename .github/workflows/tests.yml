@@ -63,6 +63,10 @@ jobs:
           cd ../eventyay/app
           uv sync --all-extras --all-groups
           uv pip install -e ../../eventyay-veditor
+      - name: Initialize PostgreSQL extensions
+        run: |
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d template1 -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS unaccent;"
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d eventyay-db -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS unaccent;"
 
       - name: Run tests
         env:
