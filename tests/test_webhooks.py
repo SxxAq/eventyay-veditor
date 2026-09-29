@@ -1221,6 +1221,7 @@ def test_tasks_process_talk_published_idempotent_public_schedule_updates():
     def mock_filter_res(*args, **kwargs):
         mock_qs = MagicMock()
         matched = [r for r in existing_resources if r.description.lower() == "video recording"]
+        mock_qs.first.side_effect = lambda: matched[0] if matched else None
         mock_qs.order_by.return_value.first.side_effect = lambda: matched[0] if matched else None
         return mock_qs
 
@@ -1230,6 +1231,7 @@ def test_tasks_process_talk_published_idempotent_public_schedule_updates():
         return new_res
 
     mock_event.submissions.filter.return_value.first.return_value = mock_sub
+    mock_sub.resources.filter.side_effect = mock_filter_res
 
     with (
         patch("eventyay.base.models.Event.objects.filter") as mock_event_filter,

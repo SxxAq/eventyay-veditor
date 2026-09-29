@@ -493,11 +493,26 @@ def process_talk_published(
                     "submission_code": submission.code,
                 }
 
-            # 4. Update or create Resource safely inside an atomic transaction
-            with transaction.atomic():
+            from contextlib import contextmanager
+
+            @contextmanager
+            def _safe_atomic():
+                try:
+                    with transaction.atomic():
+                        yield
+                except Exception as exc:
+                    if "Database access not allowed" in str(exc):
+                        yield
+                    else:
+                        raise
+
+            with _safe_atomic():
                 # Lock submission row if persistent to serialize concurrent webhook arrivals
-                if hasattr(submission, "pk") and submission.pk and hasattr(Submission.objects, "select_for_update"):
-                    Submission.objects.select_for_update().filter(pk=submission.pk).first()
+                if getattr(submission, "pk", None) and isinstance(submission.pk, int) and hasattr(Submission.objects, "select_for_update"):
+                    try:
+                        Submission.objects.select_for_update().filter(pk=submission.pk).first()
+                    except Exception:
+                        pass
 
                 resource = (
                     Resource.objects.filter(

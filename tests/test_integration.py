@@ -1,30 +1,37 @@
 """End-to-end integration tests for the Eventyay VEditor plugin lifecycle.
 
 Exercises the complete user journey across:
-1. Organiser Handoff & Schedule Synchronization (ConnectView -> Mock VEditor)
-2. Talk Approval & Speaker Email Dispatch (VEditor Webhook -> Celery -> Mail)
-3. Media Published & Public Schedule Rendering (VEditor Webhook -> Resource -> Recording Provider)
-4. Privacy Filters (do_not_record) & Multi-Speaker Magic Links
+1. Organiser Handoff & Schedule Synchronization (ConnectView -> Mock VEditor with UTC normalization & valid JWT)
+2. Talk Approval & Speaker Email Dispatch (VEditor Webhook -> Eager Celery -> Django Mail Outbox)
+3. Media Published & Public Schedule Rendering (VEditor Webhook -> Eager Celery -> Resource -> Recording Provider)
+4. Privacy Filters (do_not_record) respected end-to-end
+5. Multi-Speaker Magic Links with distinct tokens
+6. Webhook Security & Tampering Rejection
+7. Mock VEditor /events/{id}/talks/bulk endpoint validation
 """
 
 from __future__ import annotations
 
 import json
 import time
+import urllib.parse
+from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.core import mail
 from django.core.cache import cache
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from django.urls import reverse
+from django.utils.timezone import now
+from django_scopes import scope, scopes_disabled
+from eventyay.base.models import Event, Organizer, Resource, Room, Schedule, Submission, SubmissionType, TalkSlot, Team, User
 
-from tests.mock_veditor import MockVEditor
+from tests.mock_veditor import MockVEditor, validate_jwt_structure
 from veditor.recording import VEditorRecordingProvider
-from veditor.tasks import process_talk_approved, process_talk_published
 from veditor.views import ConnectView
 from veditor.webhooks import WebhookView
 
@@ -38,17 +45,6 @@ def setup_request(request):
     return request
 
 
-class MockSettingsStorage:
-    def __init__(self, data=None):
-        self.data = data or {}
-
-    def get(self, key, default=None):
-        return self.data.get(key, default)
-
-    def set(self, key, value):
-        self.data[key] = value
-
-
 @pytest.fixture
 def mock_veditor_service():
     """Context manager fixture providing a running mock VEditor service."""
@@ -57,96 +53,104 @@ def mock_veditor_service():
 
 
 @pytest.fixture
-def integrated_event():
-    """Event mock configured with VEditor credentials."""
-    organizer = SimpleNamespace(name="FOSSASIA Org", slug="fossasia")
-    settings = MockSettingsStorage(
-        {
-            "veditor_api_key": "test-veditor-api-key-12345",
-            "veditor_api_base_url": "http://localhost:8080",
-            "veditor_webhook_secret": "test-webhook-secret-999",
-            "mail_from": "notifications@eventyay.com",
-        }
-    )
-    event_obj = SimpleNamespace(
-        id=42,
-        slug="summit-2026",
-        name="FOSSASIA Summit 2026",
-        organizer=organizer,
-        settings=settings,
-        live=True,
-    )
-    event_obj.submissions = MagicMock()
-    return event_obj
+def integrated_event(db):
+    """Real Event model instance created in the test database with VEditor credentials."""
+    with scopes_disabled():
+        organizer = Organizer.objects.create(name="FOSSASIA Org", slug="fossasia-org")
+        event = Event.objects.create(
+            organizer=organizer,
+            name="FOSSASIA Summit 2026",
+            slug="summit-2026",
+            date_from=now(),
+            plugins="veditor",
+            live=True,
+            timezone="Asia/Singapore",
+        )
+        event.settings.set("veditor_api_key", "test-veditor-api-key-12345")
+        event.settings.set("veditor_api_base_url", "http://localhost:8080")
+        event.settings.set("veditor_webhook_secret", "test-webhook-secret-999")
+        event.settings.set("mail_from", "notifications@eventyay.com")
+
+        # Create organiser user with full event settings permissions via Team
+        org_user = User.objects.create_user(
+            email="organizer@example.org",
+            password="secretpassword123",
+            fullname="Organizer Name",
+        )
+        team = Team.objects.create(
+            organizer=organizer,
+            name="Admins",
+            all_events=True,
+            can_change_event_settings=True,
+        )
+        team.members.add(org_user)
+        event.organizer_user = org_user
+
+        # Create speaker user
+        speaker_user = User.objects.create_user(
+            email="alice@example.org",
+            password="secretpassword123",
+            fullname="Alice Speaker",
+        )
+        event.speaker_user = speaker_user
+
+        # Ensure submission type
+        sub_type = SubmissionType.objects.filter(event=event).first()
+        if not sub_type:
+            sub_type = SubmissionType.objects.create(event=event, name="Keynote")
+        event.default_sub_type = sub_type
+
+    return event
 
 
 @pytest.fixture
 def integrated_talk(integrated_event):
-    """Talk submission mock with speakers and room slot."""
-    speaker1 = SimpleNamespace(
-        id=201,
-        name="Alice Speaker",
-        fullname="Alice Speaker",
-        email="alice@example.org",
-    )
-    speakers = [speaker1]
-    speakers_mgr = MagicMock()
-    speakers_mgr.all.side_effect = lambda: list(speakers)
+    """Real Submission, Room, and TalkSlot created in the test database."""
+    event = integrated_event
+    with scope(event=event):
+        room = Room.objects.create(event=event, name="Auditorium Main")
+        submission = Submission.objects.create(
+            event=event,
+            code="TALK101",
+            title="Keynote: Open Source AI",
+            submission_type=event.default_sub_type,
+            do_not_record=False,
+        )
+        submission.speakers.add(event.speaker_user)
 
-    submission = SimpleNamespace(
-        id=101,
-        code="TALK101",
-        title="Keynote: Open Source AI",
-        event=integrated_event,
-        event_id=integrated_event.id,
-        speakers=speakers_mgr,
-        do_not_record=False,
-        recording_url=None,
-    )
+        schedule = getattr(event, "wip_schedule", None) or Schedule.objects.create(event=event, version="1.0")
 
-    room = SimpleNamespace(id=1, name="Auditorium Main")
-    slot = SimpleNamespace(
-        id=301,
+        # Localized time in Asia/Singapore (UTC+8): 17:00:00 -> 09:00:00 UTC
+        tz_singapore = ZoneInfo("Asia/Singapore")
+        start_dt = datetime(2026, 9, 28, 17, 0, 0, tzinfo=tz_singapore)
+        end_dt = datetime(2026, 9, 28, 17, 45, 0, tzinfo=tz_singapore)
+
+        slot = TalkSlot.objects.create(
+            submission=submission,
+            room=room,
+            schedule=schedule,
+            is_visible=True,
+            start=start_dt,
+            end=end_dt,
+        )
+
+    return SimpleNamespace(
         submission=submission,
+        slot=slot,
         room=room,
-        start=MagicMock(isoformat=lambda: "2026-09-28T09:00:00Z"),
-        end=MagicMock(isoformat=lambda: "2026-09-28T09:45:00Z"),
+        schedule=schedule,
+        speakers=[event.speaker_user],
     )
-    submission.slots = MagicMock()
-    submission.slots.first.return_value = slot
-
-    # Setup event_obj.submissions query behavior
-    def filter_event_submissions(**kwargs):
-        m = MagicMock()
-        code = kwargs.get("code__iexact") or kwargs.get("code")
-        sub_id = kwargs.get("id")
-        if (code and str(code).upper() == submission.code) or (sub_id and int(sub_id) == submission.id):
-            m.first.return_value = submission
-        else:
-            m.first.return_value = None
-        return m
-
-    integrated_event.submissions.filter.side_effect = filter_event_submissions
-    integrated_event.current_schedule = SimpleNamespace(scheduled_talks=[slot])
-
-    return SimpleNamespace(submission=submission, slot=slot, speakers=speakers)
 
 
 # ============================================================================
-# Scenario A: Organiser Handoff & Talk Sync
+# Scenario A: Organiser Handoff & Talk Sync with UTC Normalization & Valid JWT
 # ============================================================================
 
 
 def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrated_event, integrated_talk):
-    """Verify organizer handoff: syncs talk schedule and redirects with valid SSO token."""
+    """Verify organizer handoff: syncs schedule to VEditor, asserts UTC normalization, and redirects with valid JWT."""
     rf = RequestFactory()
-    user = MagicMock()
-    user.is_authenticated = True
-    user.email = "organizer@example.org"
-    user.name = "Organizer Name"
-    user.fullname = "Organizer Name"
-    user.get_display_name = lambda: "Organizer Name"
-    user.has_event_permission.return_value = True
 
     mock_veditor_service.events_list = [
         {
@@ -155,8 +159,6 @@ def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrat
             "name": integrated_event.name,
         }
     ]
-
-    integrated_event.get_talk_slots = lambda: [integrated_talk.slot]
 
     request = rf.post(
         reverse(
@@ -168,7 +170,7 @@ def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrat
         ),
         data={"action": "sync"},
     )
-    request.user = user
+    request.user = integrated_event.organizer_user
     request.event = integrated_event
     request.organizer = integrated_event.organizer
     setup_request(request)
@@ -180,15 +182,23 @@ def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrat
         event=integrated_event.slug,
     )
 
-    # 1. Assert VEditor received bulk schedule import
+    # 1. Assert VEditor received talk synchronization payload
     assert len(mock_veditor_service.imported_schedules) == 1
     import_payload = mock_veditor_service.imported_schedules[0]
     assert import_payload["event_id"] == integrated_event.id
     assert len(import_payload["talks"]) == 1
+
     synced_talk = import_payload["talks"][0]
     assert synced_talk["external_id"] == "TALK101"
     assert synced_talk["title"] == "Keynote: Open Source AI"
     assert synced_talk["room"] == "Auditorium Main"
+
+    # Explicitly assert UTC normalization on talk start/end times
+    # Local input: 2026-09-28 17:00:00+08:00 (Asia/Singapore) -> Normalized UTC: 2026-09-28T09:00:00+00:00
+    assert "+00:00" in synced_talk["start"] or synced_talk["start"].endswith("Z")
+    assert synced_talk["start"] in ("2026-09-28T09:00:00+00:00", "2026-09-28T09:00:00Z")
+    assert "+00:00" in synced_talk["end"] or synced_talk["end"].endswith("Z")
+    assert synced_talk["end"] in ("2026-09-28T09:45:00+00:00", "2026-09-28T09:45:00Z")
 
     # 2. Assert SSO Token was requested for organizer
     assert len(mock_veditor_service.sso_token_requests) == 1
@@ -196,56 +206,43 @@ def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrat
     assert sso_req["endpoint"] == "event"
     assert sso_req["body"]["role"] == "organizer"
 
-    # 3. Assert HTTP 302 Redirect to VEditor with SSO token parameter
+    # 3. Assert HTTP 302 Redirect to VEditor with valid JWT parameter
     assert response.status_code == 302
-    assert f"http://localhost:8080/studio?event_id={integrated_event.id}" in response.url
-    assert "sso_token=mock.jwt.token.12345" in response.url
+    parsed_redirect = urllib.parse.urlparse(response.url)
+    assert parsed_redirect.scheme == "http"
+    assert parsed_redirect.netloc == "localhost:8080"
+    assert parsed_redirect.path == "/studio"
+
+    query_params = urllib.parse.parse_qs(parsed_redirect.query)
+    assert "event_id" in query_params
+    assert query_params["event_id"][0] == str(integrated_event.id)
+    assert "sso_token" in query_params
+
+    # Explicitly validate JWT structure and claims
+    token = query_params["sso_token"][0]
+    header, payload = validate_jwt_structure(token, secret=mock_veditor_service.jwt_secret)
+    assert header["typ"] == "JWT"
+    assert header["alg"] == "HS256"
+    assert payload["role"] == "organizer"
+    assert str(payload["event_id"]) == str(integrated_event.id)
+    assert "exp" in payload
+    assert "iat" in payload
 
 
 # ============================================================================
-# Scenario B: Approval Webhook & Speaker Email Dispatch
+# Scenario B: Approval Webhook & Speaker Email Dispatch (Eager Celery)
 # ============================================================================
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 def test_integration_scenario_b_talk_approved_email_dispatch(mock_veditor_service, integrated_event, integrated_talk):
-    """Verify talk.approved webhook: validates HMAC and sends speaker review magic link email."""
+    """Verify talk.approved webhook: validates HMAC, executes eager Celery inline, and delivers speaker review mail."""
     cache.clear()
     mail.outbox.clear()
     rf = RequestFactory()
 
     submission = integrated_talk.submission
     speaker = integrated_talk.speakers[0]
-
-    queued_mails = []
-
-    def mock_create_mail(**kwargs):
-        m = MagicMock()
-        m.kwargs = kwargs
-        m.to = kwargs.get("to")
-        m.subject = kwargs.get("subject")
-        m.text = kwargs.get("text")
-        m.to_users = MagicMock()
-        m.submissions = MagicMock()
-        queued_mails.append(m)
-        return m
-
-    def filter_event(**kwargs):
-        m = MagicMock()
-        if kwargs.get("id") == integrated_event.id or kwargs.get("slug") == integrated_event.slug:
-            m.first.return_value = integrated_event
-        else:
-            m.first.return_value = None
-        return m
-
-    def filter_sub(**kwargs):
-        m = MagicMock()
-        code = kwargs.get("code")
-        sub_id = kwargs.get("id")
-        if code == submission.code or sub_id == submission.id:
-            m.first.return_value = submission
-        else:
-            m.first.return_value = None
-        return m
 
     payload = {
         "event": "talk.approved",
@@ -255,64 +252,42 @@ def test_integration_scenario_b_talk_approved_email_dispatch(mock_veditor_servic
         "timestamp": time.time(),
     }
 
-    with (
-        patch("veditor.webhooks.process_talk_approved") as mock_webhook_task,
-        patch("veditor.tasks.Event.objects.filter", side_effect=filter_event),
-        patch("veditor.tasks.Submission.objects.filter", side_effect=filter_sub),
-        patch("veditor.tasks.QueuedMail.objects.create", side_effect=mock_create_mail),
-        patch("eventyay.base.models.Event.objects") as mock_webhook_event_mgr,
-    ):
-        mock_webhook_event_mgr.filter.side_effect = filter_event
+    # Step 1: Webhook ingestion triggers Celery inline via CELERY_TASK_ALWAYS_EAGER
+    response = mock_veditor_service.emit_webhook(
+        rf,
+        event="talk.approved",
+        payload_data=payload,
+        use_request_factory=True,
+    )
+    assert response.status_code == 200
+    data = json.loads(response.content.decode("utf-8"))
+    assert data["status"] == "accepted"
 
-        # Step 1: Webhook ingestion
-        response = mock_veditor_service.emit_webhook(
-            rf,
-            event="talk.approved",
-            payload_data=payload,
-            use_request_factory=True,
-        )
-        assert response.status_code == 200
-        data = json.loads(response.content.decode("utf-8"))
-        assert data["status"] == "accepted"
-        mock_webhook_task.delay.assert_called_once_with(
-            event_id=integrated_event.id,
-            talk_id=55,
-            external_id=submission.code,
-            raw_payload=payload,
-        )
+    # Step 2: Verify speaker email was dispatched to Django mail outbox
+    assert len(mail.outbox) == 1
+    sent_mail = mail.outbox[0]
+    assert speaker.email in sent_mail.to
+    assert submission.title in sent_mail.subject
 
-        # Step 2: Celery task execution
-        result = process_talk_approved(
-            event_id=integrated_event.id,
-            talk_id=55,
-            external_id=submission.code,
-        )
-        assert result["status"] == "success"
-        assert result["sent_count"] == 1
-        assert speaker.email in result["recipients"]
+    # Step 3: Verify email body contains valid magic link with valid speaker JWT
+    assert "http://localhost:8080/studio/talks/55?sso_token=" in sent_mail.body
+    parsed_magic_url = urllib.parse.urlparse(sent_mail.body.split("http://localhost:8080/studio/talks/")[1].split()[0])
+    token_str = urllib.parse.parse_qs(parsed_magic_url.query)["sso_token"][0]
 
-        # Step 3: Verify email queued in outbox
-        assert len(queued_mails) == 1
-        sent_mail = queued_mails[0]
-        assert sent_mail.to == speaker.email
-        assert submission.title in sent_mail.subject
-        assert "sso_token=mock.jwt.token.12345" in sent_mail.text
-
-        # Verify MockVEditor received speaker SSO token request
-        assert len(mock_veditor_service.sso_token_requests) == 1
-        sso_req = mock_veditor_service.sso_token_requests[0]
-        assert sso_req["endpoint"] == "talk"
-        assert sso_req["body"]["role"] == "speaker"
-        assert sso_req["body"]["email"] == speaker.email
+    header, token_payload = validate_jwt_structure(token_str, secret=mock_veditor_service.jwt_secret)
+    assert header["typ"] == "JWT"
+    assert token_payload["role"] == "speaker"
+    assert str(token_payload["talk_id"]) == "55"
 
 
 # ============================================================================
-# Scenario C: Published Webhook & Public Schedule Playback
+# Scenario C: Published Webhook & Public Schedule Playback (Eager Celery)
 # ============================================================================
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 def test_integration_scenario_c_talk_published_public_schedule(mock_veditor_service, integrated_event, integrated_talk):
-    """Verify talk.published webhook: updates Resource and displays video player on public schedule."""
+    """Verify talk.published webhook: updates Resource in test DB via eager Celery and renders video on public schedule."""
     rf = RequestFactory()
     submission = integrated_talk.submission
 
@@ -326,53 +301,27 @@ def test_integration_scenario_c_talk_published_public_schedule(mock_veditor_serv
         "timestamp": time.time(),
     }
 
-    mock_resource = MagicMock()
-    mock_resource.id = 888
-    mock_resource.link = video_url
-    mock_resource.description = "Video Recording"
-    mock_resource.kind = "generic"
+    # Step 1: Ingest webhook and execute Celery worker inline
+    response = mock_veditor_service.emit_webhook(
+        rf,
+        event="talk.published",
+        payload_data=payload,
+        use_request_factory=True,
+    )
+    assert response.status_code == 200
+    data = json.loads(response.content.decode("utf-8"))
+    assert data["status"] == "accepted"
 
-    submission.resources = MagicMock()
-    submission.resources.filter.return_value.first.return_value = mock_resource
+    # Step 2: Assert Resource was created in the real database
+    with scope(event=integrated_event):
+        resource = Resource.objects.filter(submission=submission, link=video_url).first()
+        assert resource is not None
+        assert resource.description == "Video Recording"
+        assert resource.kind == "generic"
 
-    def filter_event(**kwargs):
-        m = MagicMock()
-        if kwargs.get("id") == integrated_event.id or kwargs.get("slug") == integrated_event.slug:
-            m.first.return_value = integrated_event
-        else:
-            m.first.return_value = None
-        return m
-
-    with (
-        patch("veditor.webhooks.process_talk_published") as mock_pub_task,
-        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
-        patch("eventyay.base.models.Resource.objects.filter") as mock_res_filter,
-    ):
-        mock_event_mgr.filter.side_effect = filter_event
-        mock_res_filter.return_value.order_by.return_value.first.return_value = mock_resource
-
-        # Step 1: Ingest webhook
-        response = mock_veditor_service.emit_webhook(
-            rf,
-            event="talk.published",
-            payload_data=payload,
-            use_request_factory=True,
-        )
-        assert response.status_code == 200
-        mock_pub_task.delay.assert_called_once_with(
-            event_id=integrated_event.id,
-            talk_id=55,
-            video_url=video_url,
-            external_id=submission.code,
-            raw_payload=payload,
-        )
-
-        # Step 2: Execute task
-        task_res = process_talk_published(**mock_pub_task.delay.call_args.kwargs)
-        assert task_res["status"] == "success"
-        assert task_res["submission_code"] == submission.code
-
-        # Step 3: Public schedule recording provider
+    # Step 3: Public schedule recording provider renders the updated resource
+    with scope(event=integrated_event):
+        submission.refresh_from_db()
         provider = VEditorRecordingProvider(integrated_event)
         recording_output = provider.get_recording(submission)
         assert "iframe" in recording_output
@@ -383,15 +332,19 @@ def test_integration_scenario_c_talk_published_public_schedule(mock_veditor_serv
 
 
 # ============================================================================
-# Scenario D: Privacy Opt-Out (do_not_record)
+# Scenario D: Privacy Opt-Out (do_not_record) Respected
 # ============================================================================
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 def test_integration_scenario_d_privacy_opt_out_respected(mock_veditor_service, integrated_event, integrated_talk):
     """Verify speaker privacy: do_not_record skips attachment and hides player from public schedule."""
     rf = RequestFactory()
     submission = integrated_talk.submission
-    submission.do_not_record = True
+
+    with scope(event=integrated_event):
+        submission.do_not_record = True
+        submission.save(update_fields=["do_not_record"])
 
     video_url = "https://cdn.example.org/videos/private-session.mp4"
     payload = {
@@ -403,119 +356,80 @@ def test_integration_scenario_d_privacy_opt_out_respected(mock_veditor_service, 
         "timestamp": time.time(),
     }
 
-    def filter_event(**kwargs):
-        m = MagicMock()
-        if kwargs.get("id") == integrated_event.id or kwargs.get("slug") == integrated_event.slug:
-            m.first.return_value = integrated_event
-        else:
-            m.first.return_value = None
-        return m
+    response = mock_veditor_service.emit_webhook(
+        rf,
+        event="talk.published",
+        payload_data=payload,
+        use_request_factory=True,
+    )
+    assert response.status_code == 200
 
-    with (
-        patch("veditor.webhooks.process_talk_published") as mock_pub_task,
-        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
-    ):
-        mock_event_mgr.filter.side_effect = filter_event
+    # Resource should not be created in DB
+    with scope(event=integrated_event):
+        assert not Resource.objects.filter(submission=submission, link=video_url).exists()
 
-        # Step 1: Ingest webhook
-        response = mock_veditor_service.emit_webhook(
-            rf,
-            event="talk.published",
-            payload_data=payload,
-            use_request_factory=True,
-        )
-        assert response.status_code == 200
-        mock_pub_task.delay.assert_called_once_with(
-            event_id=integrated_event.id,
-            talk_id=99,
-            video_url=video_url,
-            external_id=submission.code,
-            raw_payload=payload,
-        )
-
-        # Step 2: Execute published task
-        task_res = process_talk_published(
-            event_id=integrated_event.id,
-            talk_id=99,
-            external_id=submission.code,
-            video_url=video_url,
-            raw_payload=payload,
-        )
-        assert task_res["status"] == "skipped"
-        assert task_res["reason"] == "do_not_record"
-
-        # Step 3: Public schedule must remain completely blank
+        # Public schedule must remain completely blank
+        submission.refresh_from_db()
         provider = VEditorRecordingProvider(integrated_event)
         assert provider.get_recording(submission) == {}
 
 
 # ============================================================================
-# Scenario E: Multi-Speaker Magic Links
+# Scenario E: Multi-Speaker Magic Links with Distinct Tokens
 # ============================================================================
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
 def test_integration_scenario_e_multi_speaker_distinct_magic_links(mock_veditor_service, integrated_event, integrated_talk):
     """Verify multi-speaker talks: each co-speaker receives individual magic link with their own SSO token."""
     cache.clear()
     mail.outbox.clear()
+    rf = RequestFactory()
 
     submission = integrated_talk.submission
-    speaker1 = integrated_talk.speakers[0]
-    speaker2 = SimpleNamespace(
-        id=202,
-        name="Bob CoSpeaker",
-        fullname="Bob CoSpeaker",
-        email="bob@example.org",
-    )
-    all_speakers = [speaker1, speaker2]
-    submission.speakers.all.side_effect = lambda: list(all_speakers)
 
-    queued_mails = []
-
-    def mock_create_mail(**kwargs):
-        m = MagicMock()
-        m.to = kwargs.get("to")
-        m.text = kwargs.get("text")
-        m.subject = kwargs.get("subject")
-        queued_mails.append(m)
-        return m
-
-    def filter_event(**kwargs):
-        m = MagicMock()
-        if kwargs.get("id") == integrated_event.id or kwargs.get("slug") == integrated_event.slug:
-            m.first.return_value = integrated_event
-        else:
-            m.first.return_value = None
-        return m
-
-    def filter_sub(**kwargs):
-        m = MagicMock()
-        code = kwargs.get("code")
-        sub_id = kwargs.get("id")
-        if code == submission.code or sub_id == submission.id:
-            m.first.return_value = submission
-        else:
-            m.first.return_value = None
-        return m
-
-    with (
-        patch("veditor.tasks.Event.objects.filter", side_effect=filter_event),
-        patch("veditor.tasks.Submission.objects.filter", side_effect=filter_sub),
-        patch("veditor.tasks.QueuedMail.objects.create", side_effect=mock_create_mail),
-    ):
-        result = process_talk_approved(
-            event_id=integrated_event.id,
-            talk_id=55,
-            external_id=submission.code,
+    with scopes_disabled():
+        speaker2 = User.objects.create_user(
+            email="bob@example.org",
+            password="secretpassword123",
+            fullname="Bob CoSpeaker",
         )
 
-        assert result["status"] == "success"
-        assert result["sent_count"] == 2
-        assert set(result["recipients"]) == {"alice@example.org", "bob@example.org"}
-        assert len(queued_mails) == 2
-        recipients = [m.to for m in queued_mails]
-        assert "alice@example.org" in recipients
-        assert "bob@example.org" in recipients
+    with scope(event=integrated_event):
+        submission.speakers.add(speaker2)
+
+    payload = {
+        "event": "talk.approved",
+        "talk_id": 55,
+        "event_id": integrated_event.id,
+        "external_id": submission.code,
+        "timestamp": time.time(),
+    }
+
+    response = mock_veditor_service.emit_webhook(
+        rf,
+        event="talk.approved",
+        payload_data=payload,
+        use_request_factory=True,
+    )
+    assert response.status_code == 200
+
+    assert len(mail.outbox) == 2
+    recipients = {m.to[0] for m in mail.outbox}
+    assert recipients == {"alice@example.org", "bob@example.org"}
+
+    # Verify both emails contain distinct valid JWTs
+    tokens = []
+    for msg in mail.outbox:
+        magic_part = msg.body.split("http://localhost:8080/studio/talks/")[1].split()[0]
+        token = urllib.parse.parse_qs(urllib.parse.urlparse(magic_part).query)["sso_token"][0]
+        header, jwt_p = validate_jwt_structure(token, secret=mock_veditor_service.jwt_secret)
+        assert header["typ"] == "JWT"
+        assert jwt_p["role"] == "speaker"
+        tokens.append(token)
+
+    assert len(tokens) == 2
+    assert tokens[0] != tokens[1]
 
 
 # ============================================================================
@@ -542,19 +456,41 @@ def test_integration_scenario_f_tampered_signature_rejected(mock_veditor_service
         HTTP_X_VEDITOR_SIGNATURE="sha256=invalid_tampered_hash_0000000000000000000",
     )
 
-    def filter_event(**kwargs):
-        m = MagicMock()
-        if kwargs.get("id") == integrated_event.id or kwargs.get("slug") == integrated_event.slug:
-            m.first.return_value = integrated_event
-        else:
-            m.first.return_value = None
-        return m
+    view = WebhookView.as_view()
+    response = view(request)
 
-    with patch("eventyay.base.models.Event.objects") as mock_event_mgr:
-        mock_event_mgr.filter.side_effect = filter_event
-        view = WebhookView.as_view()
-        response = view(request)
+    assert response.status_code == 401
+    data = json.loads(response.content.decode("utf-8"))
+    assert "Invalid webhook signature" in data["error"]
 
-        assert response.status_code == 401
-        data = json.loads(response.content.decode("utf-8"))
-        assert "Invalid webhook signature" in data["error"]
+
+# ============================================================================
+# Scenario G: Mock VEditor /events/{id}/talks/bulk endpoint validation
+# ============================================================================
+
+
+def test_mock_veditor_bulk_talks_endpoint(mock_veditor_service):
+    """Verify MockVEditor responds to POST /events/{id}/talks/bulk and tracks synced talks."""
+    import requests
+
+    headers = {"X-API-Key": mock_veditor_service.api_key, "Content-Type": "application/json"}
+    talk_data = [
+        {"external_id": "TALK_BULK_1", "title": "Bulk Talk 1", "start": "2026-09-28T10:00:00Z"},
+        {"external_id": "TALK_BULK_2", "title": "Bulk Talk 2", "start": "2026-09-28T11:00:00Z"},
+    ]
+
+    resp = requests.post(
+        f"{mock_veditor_service.base_url}/events/42/talks/bulk",
+        json={"talks": talk_data},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    res_json = resp.json()
+    assert res_json["status"] == "ok"
+    assert res_json["synced_count"] == 2
+
+    # Assert talks were tracked in synced_talks
+    assert len(mock_veditor_service.synced_talks) == 2
+    assert mock_veditor_service.synced_talks[0]["external_id"] == "TALK_BULK_1"
+    assert mock_veditor_service.synced_talks[1]["external_id"] == "TALK_BULK_2"
+    assert len(mock_veditor_service.bulk_sync_requests) == 1
