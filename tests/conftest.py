@@ -1,6 +1,14 @@
 import pytest
+from django.conf import settings
 from django.utils.timezone import now
 from eventyay.base.models import Event, Organizer, User
+
+
+@pytest.fixture(autouse=True, scope="session")
+def configure_test_databases():
+    """Ensure database connections do not persist across tests."""
+    for db_config in settings.DATABASES.values():
+        db_config["CONN_MAX_AGE"] = 0
 
 
 @pytest.fixture
