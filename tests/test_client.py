@@ -109,6 +109,13 @@ def test_serialize_talk_with_speaker_email_variations():
     slot3 = SimpleNamespace(id=3, submission=sub3)
     assert serialize_talk(slot3)["speaker_email"] is None
 
+    # 4. Multi-speaker where first speaker has empty email and second has valid email
+    sp_empty = SimpleNamespace(email="")
+    sp_valid = SimpleNamespace(email="second_speaker@example.org")
+    sub4 = SimpleNamespace(id=4, code="T4", title="Talk 4", speakers=[sp_empty, sp_valid])
+    slot4 = SimpleNamespace(id=4, submission=sub4)
+    assert serialize_talk(slot4)["speaker_email"] == "second_speaker@example.org"
+
 
 def test_serialize_talks_list():
     slots = [

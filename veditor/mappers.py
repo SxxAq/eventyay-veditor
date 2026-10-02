@@ -26,6 +26,7 @@ def serialize_talk(talk_slot: Any, event_id: str | None = None) -> dict[str, Any
     - room: room.name or None
     - start: ISO-8601 UTC timestamp
     - end: ISO-8601 UTC timestamp
+    - speaker_email: first non-empty submission speaker email or dict fallback
     - event_id: explicit event_id or derived from submission/schedule event slug
     """
     # 1. Resolve external_id
@@ -81,14 +82,20 @@ def serialize_talk(talk_slot: Any, event_id: str | None = None) -> dict[str, Any
     speaker_email: str | None = None
     if submission is not None and hasattr(submission, "speakers"):
         speakers_attr = getattr(submission, "speakers", None)
+        speakers_list = []
         if callable(getattr(speakers_attr, "all", None)):
-            first_sp = list(speakers_attr.all())
-            if first_sp:
-                speaker_email = getattr(first_sp[0], "email", None)
-        elif isinstance(speakers_attr, (list, tuple)) and speakers_attr:
-            speaker_email = getattr(speakers_attr[0], "email", None)
+            speakers_list = list(speakers_attr.all())
+        elif isinstance(speakers_attr, (list, tuple)):
+            speakers_list = list(speakers_attr)
+        for sp in speakers_list:
+            raw_email = sp.get("email") if isinstance(sp, dict) else getattr(sp, "email", None)
+            if raw_email and str(raw_email).strip():
+                speaker_email = str(raw_email).strip()
+                break
     if not speaker_email and isinstance(talk_slot, dict):
-        speaker_email = talk_slot.get("speaker_email")
+        raw_email = talk_slot.get("speaker_email")
+        if raw_email and str(raw_email).strip():
+            speaker_email = str(raw_email).strip()
 
     # 6. Resolve event_id
     resolved_event_id = event_id
