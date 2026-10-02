@@ -26,6 +26,22 @@ class VEditorClient:
 
     DEFAULT_TIMEOUT: float = 10.0
 
+    @classmethod
+    def resolve_base_url(cls, event: Any | None = None) -> str | None:
+        """Resolve the configured VEditor base URL for an event or global settings."""
+        if event is not None and hasattr(event, "settings"):
+            val = event.settings.get("veditor_api_base_url") or event.settings.get("veditor_base_url")
+            if val and str(val).strip():
+                return str(val).strip().rstrip("/")
+        if getattr(settings, "configured", False):
+            val = getattr(settings, "VEDITOR_API_BASE_URL", None) or getattr(settings, "VEDITOR_BASE_URL", None)
+            if val and str(val).strip():
+                return str(val).strip().rstrip("/")
+        env_val = os.environ.get("VEDITOR_API_BASE_URL") or os.environ.get("VEDITOR_BASE_URL")
+        if env_val and env_val.strip():
+            return env_val.strip().rstrip("/")
+        return None
+
     def __init__(
         self,
         base_url: str | None = None,
@@ -59,7 +75,8 @@ class VEditorClient:
         self.base_url = resolved_base_url.rstrip("/") if resolved_base_url else None
 
         # Prevent leaking global VEDITOR_API_KEY to unverified custom event URLs
-        if event_has_custom_url and not event_custom_key and not api_key:
+        global_key = (getattr(settings, "VEDITOR_API_KEY", None) if getattr(settings, "configured", False) else None) or os.environ.get("VEDITOR_API_KEY")
+        if global_key and event_has_custom_url and not event_custom_key and not api_key:
             allowed_raw = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", None)
             allowed_set: set[str] = set()
             if isinstance(allowed_raw, str):
