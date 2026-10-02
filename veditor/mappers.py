@@ -77,7 +77,20 @@ def serialize_talk(talk_slot: Any, event_id: str | None = None) -> dict[str, Any
     start_iso = _parse_and_normalize(start_dt)
     end_iso = _parse_and_normalize(end_dt)
 
-    # 5. Resolve event_id
+    # 5. Resolve speaker_email
+    speaker_email: str | None = None
+    if submission is not None and hasattr(submission, "speakers"):
+        speakers_attr = getattr(submission, "speakers", None)
+        if callable(getattr(speakers_attr, "all", None)):
+            first_sp = list(speakers_attr.all())
+            if first_sp:
+                speaker_email = getattr(first_sp[0], "email", None)
+        elif isinstance(speakers_attr, (list, tuple)) and speakers_attr:
+            speaker_email = getattr(speakers_attr[0], "email", None)
+    if not speaker_email and isinstance(talk_slot, dict):
+        speaker_email = talk_slot.get("speaker_email")
+
+    # 6. Resolve event_id
     resolved_event_id = event_id
     if resolved_event_id is None:
         if submission is not None and getattr(submission, "event", None):
@@ -100,6 +113,7 @@ def serialize_talk(talk_slot: Any, event_id: str | None = None) -> dict[str, Any
         "start": start_iso,
         "end": end_iso,
         "event_id": resolved_event_id,
+        "speaker_email": speaker_email,
     }
 
 

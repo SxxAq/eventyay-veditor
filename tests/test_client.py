@@ -43,11 +43,14 @@ def test_to_utc_isoformat_aware_conversion():
 
 def test_serialize_talk_with_orm_like_objects():
     event = SimpleNamespace(slug="fossasia-summit-2026", id=101)
+    speaker = SimpleNamespace(email="keynote@example.org", name="Alice Vance")
+    speakers_manager = SimpleNamespace(all=lambda: [speaker])
     submission = SimpleNamespace(
         id=42,
         code="TALK-42",
         title="Opening Keynote",
         event=event,
+        speakers=speakers_manager,
     )
     room = SimpleNamespace(name="Main Hall")
     start = datetime(2026, 9, 12, 9, 0, 0, tzinfo=UTC)
@@ -68,6 +71,7 @@ def test_serialize_talk_with_orm_like_objects():
     assert data["start"] == "2026-09-12T09:00:00+00:00"
     assert data["end"] == "2026-09-12T10:00:00+00:00"
     assert data["event_id"] == 101
+    assert data["speaker_email"] == "keynote@example.org"
 
 
 def test_serialize_talk_with_dict_and_fallback():
@@ -78,12 +82,32 @@ def test_serialize_talk_with_dict_and_fallback():
         "start": "2026-09-12T11:00:00+00:00",
         "end": "2026-09-12T11:15:00+00:00",
         "event_id": "test-conf",
+        "speaker_email": "lightning@example.org",
     }
     data = serialize_talk(dict_talk)
     assert data["external_id"] == "SUB-99"
     assert data["title"] == "Lightning Talk"
     assert data["room"] == "Room B"
     assert data["event_id"] == "test-conf"
+    assert data["speaker_email"] == "lightning@example.org"
+
+
+def test_serialize_talk_with_speaker_email_variations():
+    # 1. Speakers as plain list
+    sp = SimpleNamespace(email="list_speaker@example.org")
+    sub1 = SimpleNamespace(id=1, code="T1", title="Talk 1", speakers=[sp])
+    slot1 = SimpleNamespace(id=1, submission=sub1)
+    assert serialize_talk(slot1)["speaker_email"] == "list_speaker@example.org"
+
+    # 2. No speakers
+    sub2 = SimpleNamespace(id=2, code="T2", title="Talk 2", speakers=[])
+    slot2 = SimpleNamespace(id=2, submission=sub2)
+    assert serialize_talk(slot2)["speaker_email"] is None
+
+    # 3. Submission without speakers attribute
+    sub3 = SimpleNamespace(id=3, code="T3", title="Talk 3")
+    slot3 = SimpleNamespace(id=3, submission=sub3)
+    assert serialize_talk(slot3)["speaker_email"] is None
 
 
 def test_serialize_talks_list():
