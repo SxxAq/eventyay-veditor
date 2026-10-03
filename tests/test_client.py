@@ -116,6 +116,35 @@ def test_serialize_talk_with_speaker_email_variations():
     slot4 = SimpleNamespace(id=4, submission=sub4)
     assert serialize_talk(slot4)["speaker_email"] == "second_speaker@example.org"
 
+    # 5. Nested dictionary submission with speaker dictionaries and uppercase/untrimmed whitespace
+    sub5 = {
+        "title": "Talk 5",
+        "speakers": [
+            {"name": "Alice", "email": "   "},
+            {"name": "Bob", "email": "  BOB.Speaker@Example.ORG  "},
+        ],
+    }
+    slot5 = {"id": 5, "submission": sub5}
+    assert serialize_talk(slot5)["speaker_email"] == "bob.speaker@example.org"
+
+    # 6. Object submission with speakers as a set and uppercase email
+    class HashableSpeaker:
+        def __init__(self, email):
+            self.email = email
+
+    sp_set = HashableSpeaker(email="  SPEAKER_SET@Domain.COM  ")
+    sub6 = SimpleNamespace(id=6, code="T6", title="Talk 6", speakers={sp_set})
+    slot6 = SimpleNamespace(id=6, submission=sub6)
+    assert serialize_talk(slot6)["speaker_email"] == "speaker_set@domain.com"
+
+    # 7. Fallback top-level speaker_email in dictionary slot with untrimmed uppercase email
+    slot7 = {
+        "external_id": "SUB-7",
+        "title": "Talk 7",
+        "speaker_email": "  Fallback.Speaker@Example.NET  ",
+    }
+    assert serialize_talk(slot7)["speaker_email"] == "fallback.speaker@example.net"
+
 
 def test_serialize_talks_list():
     slots = [

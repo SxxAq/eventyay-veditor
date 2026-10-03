@@ -30,10 +30,13 @@ def serialize_talk(talk_slot: Any, event_id: str | None = None) -> dict[str, Any
     - event_id: explicit event_id or derived from submission/schedule event slug
     """
     # 1. Resolve external_id
-    submission = getattr(talk_slot, "submission", None)
+    submission = talk_slot.get("submission") if isinstance(talk_slot, dict) else getattr(talk_slot, "submission", None)
     external_id: str | None = None
     if submission is not None:
-        external_id = getattr(submission, "code", None) or str(getattr(submission, "id", ""))
+        if isinstance(submission, dict):
+            external_id = submission.get("code") or str(submission.get("id") or "")
+        else:
+            external_id = getattr(submission, "code", None) or str(getattr(submission, "id", ""))
     if not external_id and hasattr(talk_slot, "id"):
         external_id = str(talk_slot.id)
     elif not external_id and isinstance(talk_slot, dict):
@@ -42,7 +45,7 @@ def serialize_talk(talk_slot: Any, event_id: str | None = None) -> dict[str, Any
     # 2. Resolve title
     title = ""
     if submission is not None:
-        title = getattr(submission, "title", "") or ""
+        title = submission.get("title", "") if isinstance(submission, dict) else getattr(submission, "title", "") or ""
     if not title:
         title = getattr(talk_slot, "description", "") or ""
     if not title and isinstance(talk_slot, dict):
@@ -80,22 +83,29 @@ def serialize_talk(talk_slot: Any, event_id: str | None = None) -> dict[str, Any
 
     # 5. Resolve speaker_email
     speaker_email: str | None = None
-    if submission is not None and hasattr(submission, "speakers"):
-        speakers_attr = getattr(submission, "speakers", None)
+    if submission is not None:
+        speakers_attr = submission.get("speakers") if isinstance(submission, dict) else getattr(submission, "speakers", None)
         speakers_list = []
         if callable(getattr(speakers_attr, "all", None)):
             speakers_list = list(speakers_attr.all())
-        elif isinstance(speakers_attr, (list, tuple)):
+        elif isinstance(speakers_attr, (list, tuple, set)):
+            speakers_list = list(speakers_attr)
+        elif hasattr(speakers_attr, "__iter__") and not isinstance(speakers_attr, (str, bytes, dict)):
             speakers_list = list(speakers_attr)
         for sp in speakers_list:
             raw_email = sp.get("email") if isinstance(sp, dict) else getattr(sp, "email", None)
             if raw_email and str(raw_email).strip():
-                speaker_email = str(raw_email).strip()
+                speaker_email = str(raw_email).strip().lower()
                 break
+        if not speaker_email and isinstance(submission, dict):
+            raw_email = submission.get("speaker_email") or submission.get("email")
+            if raw_email and str(raw_email).strip():
+                speaker_email = str(raw_email).strip().lower()
+
     if not speaker_email and isinstance(talk_slot, dict):
         raw_email = talk_slot.get("speaker_email")
         if raw_email and str(raw_email).strip():
-            speaker_email = str(raw_email).strip()
+            speaker_email = str(raw_email).strip().lower()
 
     # 6. Resolve event_id
     resolved_event_id = event_id
