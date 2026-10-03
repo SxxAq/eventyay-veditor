@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.test import RequestFactory
 from django.urls import reverse
+from django.utils import timezone
 
 from veditor.tasks import process_talk_approved, process_talk_published
 from veditor.webhooks import WebhookView, parse_timestamp, verify_hmac_signature
@@ -1292,7 +1293,7 @@ def test_webhook_view_post_bounds_pending_enqueues_celery_task(rf, webhook_secre
         "talk_id": 202,
         "event_id": 42,
         "external_id": "TALK-XYZ",
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": timezone.now().isoformat(),
     }
     body = json.dumps(payload).encode("utf-8")
     sig = generate_signature(webhook_secret, body)
