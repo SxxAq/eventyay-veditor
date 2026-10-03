@@ -371,28 +371,15 @@ def process_talk_published(
 
     video_url = video_url.strip()
     parsed_video = urlparse(video_url)
-    if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:
-        if (video_url.startswith("/") and not video_url.startswith("//")) or (not parsed_video.scheme and not parsed_video.netloc):
-            resolved_base = None
-            try:
-                resolved_base = VEditorClient.resolve_base_url()
-            except Exception:  # noqa: S110
-                pass
-            if not resolved_base and getattr(settings, "configured", False):
-                resolved_base = getattr(settings, "VEDITOR_API_BASE_URL", None) or getattr(settings, "VEDITOR_BASE_URL", None)
-            if not resolved_base:
-                resolved_base = os.environ.get("VEDITOR_API_BASE_URL") or os.environ.get("VEDITOR_BASE_URL")
-            if resolved_base and str(resolved_base).strip():
-                video_url = urljoin(str(resolved_base).strip().rstrip("/") + "/", video_url.lstrip("/"))
-                parsed_video = urlparse(video_url)
-        else:
-            logger.warning("Empty or invalid video_url received for talk.published: %r", video_url)
-            return {
-                "status": "error",
-                "message": "Missing or invalid video_url scheme/host",
-                "event_id": event_id,
-                "talk_id": talk_id,
-            }
+    is_relative = (video_url.startswith("/") and not video_url.startswith("//")) or (not parsed_video.scheme and not parsed_video.netloc)
+    if (parsed_video.scheme not in ("http", "https") or not parsed_video.netloc) and not is_relative:
+        logger.warning("Empty or invalid video_url received for talk.published: %r", video_url)
+        return {
+            "status": "error",
+            "message": "Missing or invalid video_url scheme/host",
+            "event_id": event_id,
+            "talk_id": talk_id,
+        }
 
     try:
         from django_scopes import scopes_disabled
