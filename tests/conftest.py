@@ -10,9 +10,12 @@ from eventyay.base.models import Event, Organizer, User
 def setup_postgres_extensions(sender, connection, **kwargs):
     """Ensure required PostgreSQL extensions exist for models with gin/trigram indexes."""
     if connection.vendor == "postgresql":
-        with connection.cursor() as cursor:
-            cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
-            cursor.execute("CREATE EXTENSION IF NOT EXISTS unaccent;")
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS unaccent;")
+        except Exception:
+            pass
 
 
 @pytest.fixture(autouse=True, scope="session")

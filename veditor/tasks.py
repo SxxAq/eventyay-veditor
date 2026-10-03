@@ -493,20 +493,7 @@ def process_talk_published(
                     "submission_code": submission.code,
                 }
 
-            from contextlib import contextmanager
-
-            @contextmanager
-            def _safe_atomic():
-                try:
-                    with transaction.atomic():
-                        yield
-                except Exception as exc:
-                    if "Database access not allowed" in str(exc):
-                        yield
-                    else:
-                        raise
-
-            with _safe_atomic():
+            with transaction.atomic():
                 # Lock submission row if persistent to serialize concurrent webhook arrivals
                 if isinstance(getattr(submission, "pk", None), int) and hasattr(Submission.objects, "select_for_update"):
                     Submission.objects.select_for_update().filter(pk=submission.pk).first()
@@ -533,19 +520,19 @@ def process_talk_published(
                     )
                     created = True
 
-            # 5. Provide backwards compatibility for recording_url attribute if present
-            if hasattr(submission, "recording_url"):
-                submission.recording_url = video_url
-                try:
-                    submission.save(update_fields=["recording_url"])
-                except DatabaseError:
-                    raise
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "Failed updating recording_url on submission %s: %s",
-                        getattr(submission, "code", None),
-                        exc,
-                    )
+                # 5. Provide backwards compatibility for recording_url attribute if present
+                if hasattr(submission, "recording_url"):
+                    submission.recording_url = video_url
+                    try:
+                        submission.save(update_fields=["recording_url"])
+                    except DatabaseError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Failed updating recording_url on submission %s: %s",
+                            getattr(submission, "code", None),
+                            exc,
+                        )
 
             logger.info(
                 "Successfully synced recording URL for submission %s (Resource ID=%s, created=%s)",

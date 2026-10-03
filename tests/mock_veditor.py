@@ -82,6 +82,15 @@ def validate_jwt_structure(token: str, secret: str | None = None) -> tuple[dict[
             import jwt
 
             jwt.decode(token, secret, algorithms=[header["alg"]], options={"verify_exp": False})
+        except ImportError:
+            if header.get("alg") != "HS256":
+                raise AssertionError(f"Unsupported algorithm for fallback verification: {header.get('alg')}") from None
+            signing_input = f"{header_b64}.{payload_b64}".encode()
+            expected_sig = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
+            sig_padded = signature_b64 + "=" * (-len(signature_b64) % 4)
+            actual_sig = base64.urlsafe_b64decode(sig_padded.encode("ascii"))
+            if not hmac.compare_digest(actual_sig, expected_sig):
+                raise AssertionError("JWT signature verification failed") from None
         except Exception as exc:
             raise AssertionError(f"JWT signature verification failed: {exc}") from exc
 

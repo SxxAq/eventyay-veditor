@@ -30,7 +30,7 @@ from django.utils.timezone import now
 from django_scopes import scope, scopes_disabled
 from eventyay.base.models import Event, Organizer, Resource, Room, Schedule, Submission, SubmissionType, TalkSlot, Team, User
 
-from tests.mock_veditor import MockVEditor, validate_jwt_structure
+from tests.mock_veditor import validate_jwt_structure
 from veditor.recording import VEditorRecordingProvider
 from veditor.views import ConnectView
 from veditor.webhooks import WebhookView
@@ -43,13 +43,6 @@ def setup_request(request):
     request.session.save()
     request._messages = FallbackStorage(request)
     return request
-
-
-@pytest.fixture
-def mock_veditor_service():
-    """Context manager fixture providing a running mock VEditor service."""
-    with MockVEditor() as mock:
-        yield mock
 
 
 @pytest.fixture
@@ -148,11 +141,11 @@ def integrated_talk(integrated_event):
 # ============================================================================
 
 
-def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrated_event, integrated_talk):
+def test_integration_scenario_a_organiser_handoff(mock_veditor, integrated_event, integrated_talk):
     """Verify organizer handoff: syncs schedule to VEditor, asserts UTC normalization, and redirects with valid JWT."""
     rf = RequestFactory()
 
-    mock_veditor_service.events_list = [
+    mock_veditor.events_list = [
         {
             "id": integrated_event.id,
             "external_id": integrated_event.slug,
@@ -183,8 +176,8 @@ def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrat
     )
 
     # 1. Assert VEditor received talk synchronization payload
-    assert len(mock_veditor_service.imported_schedules) == 1
-    import_payload = mock_veditor_service.imported_schedules[0]
+    assert len(mock_veditor.imported_schedules) == 1
+    import_payload = mock_veditor.imported_schedules[0]
     assert import_payload["event_id"] == integrated_event.id
     assert len(import_payload["talks"]) == 1
 
@@ -201,8 +194,8 @@ def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrat
     assert synced_talk["end"] in ("2026-09-28T09:45:00+00:00", "2026-09-28T09:45:00Z")
 
     # 2. Assert SSO Token was requested for organizer
-    assert len(mock_veditor_service.sso_token_requests) == 1
-    sso_req = mock_veditor_service.sso_token_requests[0]
+    assert len(mock_veditor.sso_token_requests) == 1
+    sso_req = mock_veditor.sso_token_requests[0]
     assert sso_req["endpoint"] == "event"
     assert sso_req["body"]["role"] == "organizer"
 
@@ -220,7 +213,7 @@ def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrat
 
     # Explicitly validate JWT structure and claims
     token = query_params["sso_token"][0]
-    header, payload = validate_jwt_structure(token, secret=mock_veditor_service.jwt_secret)
+    header, payload = validate_jwt_structure(token, secret=mock_veditor.jwt_secret)
     assert header["typ"] == "JWT"
     assert header["alg"] == "HS256"
     assert payload["role"] == "organizer"
@@ -235,7 +228,7 @@ def test_integration_scenario_a_organiser_handoff(mock_veditor_service, integrat
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
-def test_integration_scenario_b_talk_approved_email_dispatch(mock_veditor_service, integrated_event, integrated_talk):
+def test_integration_scenario_b_talk_approved_email_dispatch(mock_veditor, integrated_event, integrated_talk):
     """Verify talk.approved webhook: validates HMAC, executes eager Celery inline, and delivers speaker review mail."""
     cache.clear()
     mail.outbox.clear()
@@ -253,7 +246,7 @@ def test_integration_scenario_b_talk_approved_email_dispatch(mock_veditor_servic
     }
 
     # Step 1: Webhook ingestion triggers Celery inline via CELERY_TASK_ALWAYS_EAGER
-    response = mock_veditor_service.emit_webhook(
+    response = mock_veditor.emit_webhook(
         rf,
         event="talk.approved",
         payload_data=payload,
@@ -274,7 +267,7 @@ def test_integration_scenario_b_talk_approved_email_dispatch(mock_veditor_servic
     parsed_magic_url = urllib.parse.urlparse(sent_mail.body.split("http://localhost:8080/studio/talks/")[1].split()[0])
     token_str = urllib.parse.parse_qs(parsed_magic_url.query)["sso_token"][0]
 
-    header, token_payload = validate_jwt_structure(token_str, secret=mock_veditor_service.jwt_secret)
+    header, token_payload = validate_jwt_structure(token_str, secret=mock_veditor.jwt_secret)
     assert header["typ"] == "JWT"
     assert token_payload["role"] == "speaker"
     assert str(token_payload["talk_id"]) == "55"
@@ -286,7 +279,7 @@ def test_integration_scenario_b_talk_approved_email_dispatch(mock_veditor_servic
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
-def test_integration_scenario_c_talk_published_public_schedule(mock_veditor_service, integrated_event, integrated_talk):
+def test_integration_scenario_c_talk_published_public_schedule(mock_veditor, integrated_event, integrated_talk):
     """Verify talk.published webhook: updates Resource in test DB via eager Celery and renders video on public schedule."""
     rf = RequestFactory()
     submission = integrated_talk.submission
@@ -302,7 +295,7 @@ def test_integration_scenario_c_talk_published_public_schedule(mock_veditor_serv
     }
 
     # Step 1: Ingest webhook and execute Celery worker inline
-    response = mock_veditor_service.emit_webhook(
+    response = mock_veditor.emit_webhook(
         rf,
         event="talk.published",
         payload_data=payload,
@@ -337,7 +330,7 @@ def test_integration_scenario_c_talk_published_public_schedule(mock_veditor_serv
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
-def test_integration_scenario_d_privacy_opt_out_respected(mock_veditor_service, integrated_event, integrated_talk):
+def test_integration_scenario_d_privacy_opt_out_respected(mock_veditor, integrated_event, integrated_talk):
     """Verify speaker privacy: do_not_record skips attachment and hides player from public schedule."""
     rf = RequestFactory()
     submission = integrated_talk.submission
@@ -356,7 +349,7 @@ def test_integration_scenario_d_privacy_opt_out_respected(mock_veditor_service, 
         "timestamp": time.time(),
     }
 
-    response = mock_veditor_service.emit_webhook(
+    response = mock_veditor.emit_webhook(
         rf,
         event="talk.published",
         payload_data=payload,
@@ -380,7 +373,7 @@ def test_integration_scenario_d_privacy_opt_out_respected(mock_veditor_service, 
 
 
 @override_settings(CELERY_TASK_ALWAYS_EAGER=True, CELERY_TASK_EAGER_PROPAGATES=True)
-def test_integration_scenario_e_multi_speaker_distinct_magic_links(mock_veditor_service, integrated_event, integrated_talk):
+def test_integration_scenario_e_multi_speaker_distinct_magic_links(mock_veditor, integrated_event, integrated_talk):
     """Verify multi-speaker talks: each co-speaker receives individual magic link with their own SSO token."""
     cache.clear()
     mail.outbox.clear()
@@ -406,7 +399,7 @@ def test_integration_scenario_e_multi_speaker_distinct_magic_links(mock_veditor_
         "timestamp": time.time(),
     }
 
-    response = mock_veditor_service.emit_webhook(
+    response = mock_veditor.emit_webhook(
         rf,
         event="talk.approved",
         payload_data=payload,
@@ -423,7 +416,7 @@ def test_integration_scenario_e_multi_speaker_distinct_magic_links(mock_veditor_
     for msg in mail.outbox:
         magic_part = msg.body.split("http://localhost:8080/studio/talks/")[1].split()[0]
         token = urllib.parse.parse_qs(urllib.parse.urlparse(magic_part).query)["sso_token"][0]
-        header, jwt_p = validate_jwt_structure(token, secret=mock_veditor_service.jwt_secret)
+        header, jwt_p = validate_jwt_structure(token, secret=mock_veditor.jwt_secret)
         assert header["typ"] == "JWT"
         assert jwt_p["role"] == "speaker"
         tokens.append(token)
@@ -437,7 +430,7 @@ def test_integration_scenario_e_multi_speaker_distinct_magic_links(mock_veditor_
 # ============================================================================
 
 
-def test_integration_scenario_f_tampered_signature_rejected(mock_veditor_service, integrated_event):
+def test_integration_scenario_f_tampered_signature_rejected(mock_veditor, integrated_event):
     """Verify security boundary: forged or tampered HMAC signature is rejected with HTTP 401."""
     rf = RequestFactory()
     payload = {
@@ -469,18 +462,18 @@ def test_integration_scenario_f_tampered_signature_rejected(mock_veditor_service
 # ============================================================================
 
 
-def test_mock_veditor_bulk_talks_endpoint(mock_veditor_service):
+def test_mock_veditor_bulk_talks_endpoint(mock_veditor):
     """Verify MockVEditor responds to POST /events/{id}/talks/bulk and tracks synced talks."""
     import requests
 
-    headers = {"X-API-Key": mock_veditor_service.api_key, "Content-Type": "application/json"}
+    headers = {"X-API-Key": mock_veditor.api_key, "Content-Type": "application/json"}
     talk_data = [
         {"external_id": "TALK_BULK_1", "title": "Bulk Talk 1", "start": "2026-09-28T10:00:00Z"},
         {"external_id": "TALK_BULK_2", "title": "Bulk Talk 2", "start": "2026-09-28T11:00:00Z"},
     ]
 
     resp = requests.post(
-        f"{mock_veditor_service.base_url}/events/42/talks/bulk",
+        f"{mock_veditor.base_url}/events/42/talks/bulk",
         json={"talks": talk_data},
         headers=headers,
     )
@@ -490,7 +483,7 @@ def test_mock_veditor_bulk_talks_endpoint(mock_veditor_service):
     assert res_json["synced_count"] == 2
 
     # Assert talks were tracked in synced_talks
-    assert len(mock_veditor_service.synced_talks) == 2
-    assert mock_veditor_service.synced_talks[0]["external_id"] == "TALK_BULK_1"
-    assert mock_veditor_service.synced_talks[1]["external_id"] == "TALK_BULK_2"
-    assert len(mock_veditor_service.bulk_sync_requests) == 1
+    assert len(mock_veditor.synced_talks) == 2
+    assert mock_veditor.synced_talks[0]["external_id"] == "TALK_BULK_1"
+    assert mock_veditor.synced_talks[1]["external_id"] == "TALK_BULK_2"
+    assert len(mock_veditor.bulk_sync_requests) == 1
