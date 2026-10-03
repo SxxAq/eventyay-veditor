@@ -185,8 +185,10 @@
                     </div>
                     <div class="veditor-schedule-summary">
                         {% if talks_count %}
-                            {% blocktrans trimmed with count=talks_count %}
-                            <strong>{{ count }}</strong> scheduled session(s) ready to sync.
+                            {% blocktrans trimmed count count=talks_count %}
+                            <strong>{{ count }}</strong> scheduled session ready to sync.
+                            {% plural %}
+                            <strong>{{ count }}</strong> scheduled sessions ready to sync.
                             {% endblocktrans %}
                         {% else %}
                             {% trans "No scheduled sessions found for this event yet." %}
@@ -213,86 +215,6 @@
                 </div>
             </div>
         </div>
-
-        {% if room_form %}
-        <!-- Room Recording Ingestion Card (when room_form is available) -->
-        <div class="panel panel-default veditor-panel">
-            <div class="panel-heading">
-                <h3 class="panel-title">
-                    <i class="fa fa-video-camera"></i> {% trans "Attach Room Recording" %}
-                </h3>
-            </div>
-            <div class="panel-body">
-                <p class="text-muted">
-                    {% trans "Attach a continuous room recording to automatically match and cut all talks scheduled in that room." %}
-                </p>
-                <form method="post" action="">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="attach_room_recording">
-                    <div class="form-group {% if room_form.room.errors %}has-error{% endif %}">
-                        <label for="{{ room_form.room.id_for_label }}">{{ room_form.room.label }} <span class="text-danger">*</span></label>
-                        {{ room_form.room }}
-                        {% if room_form.room.help_text %}
-                            <span class="help-block">{{ room_form.room.help_text }}</span>
-                        {% endif %}
-                        {% for error in room_form.room.errors %}
-                            <span class="help-block text-danger">{{ error }}</span>
-                        {% endfor %}
-                    </div>
-
-                    <div class="row">
-                        <div class="col-xs-12 col-sm-6">
-                            <div class="form-group {% if room_form.source_path.errors %}has-error{% endif %}">
-                                <label for="{{ room_form.source_path.id_for_label }}">{{ room_form.source_path.label }}</label>
-                                {{ room_form.source_path }}
-                                {% if room_form.source_path.help_text %}
-                                    <span class="help-block">{{ room_form.source_path.help_text }}</span>
-                                {% endif %}
-                                {% for error in room_form.source_path.errors %}
-                                    <span class="help-block text-danger">{{ error }}</span>
-                                {% endfor %}
-                            </div>
-                        </div>
-                        <div class="col-xs-12 col-sm-6">
-                            <div class="form-group {% if room_form.relative_key.errors %}has-error{% endif %}">
-                                <label for="{{ room_form.relative_key.id_for_label }}">{{ room_form.relative_key.label }}</label>
-                                {{ room_form.relative_key }}
-                                {% if room_form.relative_key.help_text %}
-                                    <span class="help-block">{{ room_form.relative_key.help_text }}</span>
-                                {% endif %}
-                                {% for error in room_form.relative_key.errors %}
-                                    <span class="help-block text-danger">{{ error }}</span>
-                                {% endfor %}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group {% if room_form.recording_start.errors %}has-error{% endif %}">
-                        <label for="{{ room_form.recording_start.id_for_label }}">{{ room_form.recording_start.label }}</label>
-                        {{ room_form.recording_start }}
-                        {% if room_form.recording_start.help_text %}
-                            <span class="help-block">{{ room_form.recording_start.help_text }}</span>
-                        {% endif %}
-                        {% for error in room_form.recording_start.errors %}
-                            <span class="help-block text-danger">{{ error }}</span>
-                        {% endfor %}
-                    </div>
-
-                    {% if room_form.non_field_errors %}
-                        <div class="alert alert-danger">
-                            {% for error in room_form.non_field_errors %}
-                                <p>{{ error }}</p>
-                            {% endfor %}
-                        </div>
-                    {% endif %}
-
-                    <button type="submit" class="btn btn-info" id="btn-attach-room-recording">
-                        <i class="fa fa-paperclip"></i> {% trans "Attach Recording to Room Talks" %}
-                    </button>
-                </form>
-            </div>
-        </div>
-        {% endif %}
 
         {% if talks %}
         <!-- Scheduled Talks Table (Full Width 12-Columns) -->
@@ -334,7 +256,7 @@
                                 <div class="veditor-status-cell">
                                     {% if slot.submission.recording_url %}
                                         <span class="label label-success">
-                                            <i class="fa fa-check"></i> {% trans "Published" %}
+                                             <i class="fa fa-check"></i> {% trans "Published" %}
                                         </span>
                                     {% elif slot.submission.do_not_record %}
                                         <span class="label label-default">
@@ -346,7 +268,7 @@
                                         </span>
                                     {% endif %}
 
-                                    {% if slot.submission.speakers.exists or slot.submission.speakers %}
+                                    {% if slot.submission.speakers.exists %}
                                         <form method="post" action="" class="veditor-table-action-form">
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="resend_speaker_link">
