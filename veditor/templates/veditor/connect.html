@@ -217,80 +217,105 @@
         </div>
 
         {% if veditor_configured %}
-        <div class="veditor-card" id="card-attach-room-recording">
-            <div class="veditor-card-header">
-                <h3 class="veditor-card-title">
-                    <i class="fa fa-film"></i> {% trans "Attach Room Recording" %}
+        <div class="panel panel-default veditor-panel" id="card-attach-room-recording">
+            <div class="panel-heading">
+                <div class="pull-right">
+                    <span class="label label-info veditor-label-ingest">
+                        <i class="fa fa-film"></i> {% trans "Batch Ingestion" %}
+                    </span>
+                </div>
+                <h3 class="panel-title">
+                    <i class="fa fa-video-camera"></i> {% trans "Attach Room Recording" %}
                 </h3>
             </div>
-            <div class="veditor-card-body">
+            <div class="panel-body">
                 <p class="text-muted">
-                    {% trans "Attach a continuous room recording from shared storage or ingest roots to automatically segment and align video with scheduled sessions in that room." %}
+                    {% trans "Attach continuous video footage recorded for an entire room. VEditor will automatically match all scheduled talks in that room and pre-align start and end boundaries on the editor timeline." %}
                 </p>
-                <form method="post" action="">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="attach_room_recording">
-                    <div class="form-group {% if room_form.room.errors %}has-error{% endif %}">
-                        <label for="{{ room_form.room.id_for_label }}">{{ room_form.room.label }} <span class="text-danger">*</span></label>
-                        {{ room_form.room }}
-                        {% if room_form.room.help_text %}
-                            <span class="help-block">{{ room_form.room.help_text }}</span>
-                        {% endif %}
-                        {% for error in room_form.room.errors %}
-                            <span class="help-block text-danger">{{ error }}</span>
-                        {% endfor %}
-                    </div>
 
-                    <div class="row">
-                        <div class="col-xs-12 col-sm-6">
-                            <div class="form-group {% if room_form.source_path.errors %}has-error{% endif %}">
-                                <label for="{{ room_form.source_path.id_for_label }}">{{ room_form.source_path.label }}</label>
-                                {{ room_form.source_path }}
-                                {% if room_form.source_path.help_text %}
-                                    <span class="help-block">{{ room_form.source_path.help_text }}</span>
-                                {% endif %}
-                                {% for error in room_form.source_path.errors %}
-                                    <span class="help-block text-danger">{{ error }}</span>
-                                {% endfor %}
-                            </div>
-                        </div>
-                        <div class="col-xs-12 col-sm-6">
-                            <div class="form-group {% if room_form.relative_key.errors %}has-error{% endif %}">
-                                <label for="{{ room_form.relative_key.id_for_label }}">{{ room_form.relative_key.label }}</label>
-                                {{ room_form.relative_key }}
-                                {% if room_form.relative_key.help_text %}
-                                    <span class="help-block">{{ room_form.relative_key.help_text }}</span>
-                                {% endif %}
-                                {% for error in room_form.relative_key.errors %}
-                                    <span class="help-block text-danger">{{ error }}</span>
-                                {% endfor %}
-                            </div>
-                        </div>
+                {% if rooms_count == 0 %}
+                    <div class="alert alert-warning" style="margin-bottom: 0;">
+                        <i class="fa fa-exclamation-triangle"></i>
+                        {% trans "No rooms are configured for this event. Configure rooms and schedule talks in Eventyay before attaching room recordings." %}
                     </div>
+                {% else %}
+                    <form method="post" action="" class="veditor-room-recording-form">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="attach_room_recording">
 
-                    <div class="form-group {% if room_form.recording_start.errors %}has-error{% endif %}">
-                        <label for="{{ room_form.recording_start.id_for_label }}">{{ room_form.recording_start.label }}</label>
-                        {{ room_form.recording_start }}
-                        {% if room_form.recording_start.help_text %}
-                            <span class="help-block">{{ room_form.recording_start.help_text }}</span>
-                        {% endif %}
-                        {% for error in room_form.recording_start.errors %}
-                            <span class="help-block text-danger">{{ error }}</span>
-                        {% endfor %}
-                    </div>
-
-                    {% if room_form.non_field_errors %}
-                        <div class="alert alert-danger">
-                            {% for error in room_form.non_field_errors %}
-                                <p>{{ error }}</p>
+                        <!-- Event Room Selection -->
+                        <div class="form-group {% if room_form.room.errors %}has-error{% endif %}">
+                            <label for="{{ room_form.room.id_for_label }}">{{ room_form.room.label }} <span class="text-danger">*</span></label>
+                            {{ room_form.room }}
+                            {% if room_form.room.help_text %}
+                                <span class="help-block">{{ room_form.room.help_text }}</span>
+                            {% endif %}
+                            {% for error in room_form.room.errors %}
+                                <span class="help-block text-danger">{{ error }}</span>
                             {% endfor %}
                         </div>
-                    {% endif %}
 
-                    <button type="submit" class="btn btn-info" id="btn-attach-room-recording">
-                        <i class="fa fa-paperclip"></i> {% trans "Attach Recording to Room Talks" %}
-                    </button>
-                </form>
+                        <!-- Storage Location Options -->
+                        <div class="well veditor-subwell veditor-ingest-source-well">
+                            <h4 class="veditor-subwell-title">
+                                <i class="fa fa-hdd-o text-muted"></i> {% trans "Recording File Location" %}
+                            </h4>
+                            <p class="text-muted small" style="margin-bottom: 12px;">
+                                {% trans "Specify either the absolute path on shared storage accessible to VEditor, or the relative key inside VEditor's ingest directory." %}
+                            </p>
+                            <div class="row">
+                                <div class="col-xs-12 col-sm-6">
+                                    <div class="form-group {% if room_form.source_path.errors %}has-error{% endif %}" style="margin-bottom: 0;">
+                                        <label for="{{ room_form.source_path.id_for_label }}">{{ room_form.source_path.label }}</label>
+                                        {{ room_form.source_path }}
+                                        {% if room_form.source_path.help_text %}
+                                            <span class="help-block" style="margin-bottom: 0;">{{ room_form.source_path.help_text }}</span>
+                                        {% endif %}
+                                        {% for error in room_form.source_path.errors %}
+                                            <span class="help-block text-danger">{{ error }}</span>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                <div class="col-xs-12 col-sm-6">
+                                    <div class="form-group {% if room_form.relative_key.errors %}has-error{% endif %}" style="margin-bottom: 0;">
+                                        <label for="{{ room_form.relative_key.id_for_label }}">{{ room_form.relative_key.label }}</label>
+                                        {{ room_form.relative_key }}
+                                        {% if room_form.relative_key.help_text %}
+                                            <span class="help-block" style="margin-bottom: 0;">{{ room_form.relative_key.help_text }}</span>
+                                        {% endif %}
+                                        {% for error in room_form.relative_key.errors %}
+                                            <span class="help-block text-danger">{{ error }}</span>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Recording Start Time Offset -->
+                        <div class="form-group {% if room_form.recording_start.errors %}has-error{% endif %}">
+                            <label for="{{ room_form.recording_start.id_for_label }}">{{ room_form.recording_start.label }}</label>
+                            {{ room_form.recording_start }}
+                            {% if room_form.recording_start.help_text %}
+                                <span class="help-block">{{ room_form.recording_start.help_text }}</span>
+                            {% endif %}
+                            {% for error in room_form.recording_start.errors %}
+                                <span class="help-block text-danger">{{ error }}</span>
+                            {% endfor %}
+                        </div>
+
+                        {% if room_form.non_field_errors %}
+                            <div class="alert alert-danger">
+                                {% for error in room_form.non_field_errors %}
+                                    <p>{{ error }}</p>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+
+                        <button type="submit" class="btn btn-primary" id="btn-attach-room-recording">
+                            <i class="fa fa-paperclip"></i> {% trans "Attach Recording to Room Talks" %}
+                        </button>
+                    </form>
+                {% endif %}
             </div>
         </div>
         {% endif %}
