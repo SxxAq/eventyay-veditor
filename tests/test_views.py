@@ -333,6 +333,7 @@ def test_connect_view_get_inbound_webhook_context(event, organizer_user, rf):
     assert response.status_code == 200
     assert "inbound_webhook_url" in response.context_data
     assert "/webhook/" in response.context_data["inbound_webhook_url"]
+    assert f"?event={event.slug}" in response.context_data["inbound_webhook_url"]
     assert response.context_data["veditor_webhook_secret_configured"] is False
 
     # Now with webhook secret configured

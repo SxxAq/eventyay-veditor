@@ -106,9 +106,16 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
         try:
             webhook_path = reverse("plugins:veditor:webhook")
-            context["inbound_webhook_url"] = self.request.build_absolute_uri(webhook_path)
+            base_webhook_url = self.request.build_absolute_uri(webhook_path)
         except Exception:
-            context["inbound_webhook_url"] = self.request.build_absolute_uri("/api/v1/veditor/webhook/")
+            base_webhook_url = self.request.build_absolute_uri("/api/v1/veditor/webhook/")
+
+        event_slug = getattr(event, "slug", None)
+        if event_slug:
+            sep = "&" if "?" in base_webhook_url else "?"
+            context["inbound_webhook_url"] = f"{base_webhook_url}{sep}event={event_slug}"
+        else:
+            context["inbound_webhook_url"] = base_webhook_url
         context["veditor_webhook_secret_configured"] = has_saved_secret
 
         return context

@@ -162,7 +162,16 @@ class WebhookView(View):
                 if not event_obj:
                     event_obj = Event.objects.filter(slug=str(event_id)).first()
 
-            # Fallback: if event_id did not resolve directly, resolve via talk submission code (external_id)
+            # Fallback 1: if event_id in payload did not resolve directly, check query parameters (?event=<slug> or ?event_id=<id>)
+            if not event_obj:
+                query_event = request.GET.get("event") or request.GET.get("event_id")
+                if query_event is not None and query_event != "":
+                    if str(query_event).isdigit():
+                        event_obj = Event.objects.filter(id=int(query_event)).first()
+                    if not event_obj:
+                        event_obj = Event.objects.filter(slug=str(query_event)).first()
+
+            # Fallback 2: if event did not resolve directly, resolve via talk submission code (external_id)
             if not event_obj and external_id:
                 try:
                     try:

@@ -591,6 +591,55 @@ def test_webhook_view_fallback_external_id_when_event_id_unmatched(rf):
         assert mock_task.delay.called
 
 
+def test_webhook_view_fallback_event_secret_via_query_param_slug(rf):
+    event_secret = "event-secret-from-query-param-999"
+    payload = {
+        "event": "ping",
+        "event_id": 106524,
+        "message": "VEditor webhook connectivity test",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(event_secret, body)
+
+    request = rf.post(
+        f"{reverse('plugins:veditor:webhook')}?event=dev-summit",
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    mock_event = SimpleNamespace(
+        id=3174,
+        slug="dev-summit",
+        settings=SimpleNamespace(get=lambda k, d=None: event_secret if k == "veditor_webhook_secret" else d),
+    )
+
+    def mock_filter(*args, **kwargs):
+        if "id" in kwargs and kwargs["id"] == 106524:
+            return SimpleNamespace(first=lambda: None)
+        if "slug" in kwargs and kwargs["slug"] == "106524":
+            return SimpleNamespace(first=lambda: None)
+        if "slug" in kwargs and kwargs["slug"] == "dev-summit":
+            return SimpleNamespace(first=lambda: mock_event)
+        return SimpleNamespace(first=lambda: None)
+
+    with (
+        patch("veditor.webhooks.settings") as mock_settings,
+        patch.dict("os.environ", {}, clear=True),
+        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
+    ):
+        mock_settings.VEDITOR_WEBHOOK_SECRET = None
+        mock_event_mgr.filter.side_effect = mock_filter
+
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        data = json.loads(response.content.decode("utf-8"))
+        assert data["status"] == "pong"
+
+
 def test_webhook_view_event_lookup_db_error_returns_500(rf, webhook_secret):
     payload = {"talk_id": 101, "event_id": 42, "timestamp": time.time()}
     body = json.dumps(payload).encode("utf-8")
