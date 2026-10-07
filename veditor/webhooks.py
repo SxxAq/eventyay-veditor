@@ -186,6 +186,8 @@ class WebhookView(View):
                         submission = Submission.objects.filter(code=str(external_id)).select_related("event").first()
                         if submission and submission.event:
                             event_obj = submission.event
+                except DatabaseError:
+                    raise
                 except Exception as sub_exc:  # noqa: BLE001
                     logger.debug(
                         "Failed looking up event via submission external_id %s: %s",
@@ -194,8 +196,7 @@ class WebhookView(View):
                     )
 
             if event_obj:
-                if event_id is None or event_id == "":
-                    event_id = event_obj.id
+                event_id = event_obj.id
                 if hasattr(event_obj, "settings"):
                     secret = event_obj.settings.get("veditor_webhook_secret")
         except DatabaseError as exc:
@@ -224,6 +225,9 @@ class WebhookView(View):
         if event_type == "ping":
             return JsonResponse({"status": "pong", "message": "Webhook verified"}, status=200)
 
+        if event_type == "talk.preview_ready":
+            return JsonResponse({"status": "accepted", "message": "Preview event acknowledged"}, status=200)
+
         if event_type not in ("talk.approved", "talk.bounds_pending", "talk.published"):
             return JsonResponse({"error": f"Unsupported webhook event type: {event_type}"}, status=400)
 
@@ -239,6 +243,15 @@ class WebhookView(View):
             if not raw_url or not isinstance(raw_url, str) or not raw_url.strip():
                 return JsonResponse({"error": "Missing or invalid video_url for talk.published event"}, status=400)
             video_url = raw_url.strip()
+            if video_url.startswith("/"):
+                base_url = (
+                    (event_obj.settings.get("veditor_api_base_url") if event_obj and hasattr(event_obj, "settings") else None)
+                    or getattr(settings, "VEDITOR_API_BASE_URL", None)
+                    or os.environ.get("VEDITOR_API_BASE_URL")
+                    or "http://localhost:8080"
+                ).rstrip("/")
+                video_url = f"{base_url}{video_url}"
+
             parsed_video = urlparse(video_url)
             if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:
                 return JsonResponse({"error": "video_url must be a valid HTTP or HTTPS URL with host"}, status=400)

@@ -588,7 +588,47 @@ def test_webhook_view_fallback_external_id_when_event_id_unmatched(rf):
         response = view(request)
 
         assert response.status_code == 200
-        assert mock_task.delay.called
+        mock_task.delay.assert_called_once_with(
+            event_id=55,
+            talk_id=101,
+            external_id="SUB-CODE-456",
+            raw_payload=payload,
+        )
+
+
+def test_webhook_view_database_error_during_submission_lookup_returns_500(rf, webhook_secret):
+    payload = {
+        "event": "talk.approved",
+        "talk_id": 101,
+        "event_id": "",
+        "external_id": "TALK-ERR",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    from django.db import DatabaseError
+
+    with (
+        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
+        patch("eventyay.base.models.Submission.objects") as mock_sub_mgr,
+    ):
+        mock_event_mgr.filter.return_value.first.return_value = None
+        mock_sub_mgr.filter.side_effect = DatabaseError("Database failure looking up submission")
+
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 500
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Database error looking up event secret" in data["error"]
 
 
 def test_webhook_view_fallback_event_secret_via_query_param_slug(rf):
@@ -1175,6 +1215,72 @@ def test_webhook_view_talk_published_missing_external_id(rf, webhook_secret):
         assert response.status_code == 400
         data = json.loads(response.content.decode("utf-8"))
         assert "external_id" in data["error"]
+
+
+def test_webhook_view_talk_published_relative_video_url(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "video_url": "/studio/media/42/final/final.mp4",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with (
+        patch("veditor.webhooks.settings") as mock_settings,
+        patch("veditor.webhooks.process_talk_published") as mock_task,
+    ):
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        mock_settings.VEDITOR_API_BASE_URL = "http://localhost:8080"
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        mock_task.delay.assert_called_once_with(
+            event_id=10,
+            talk_id=42,
+            video_url="http://localhost:8080/studio/media/42/final/final.mp4",
+            external_id="ABCDE",
+            raw_payload=payload,
+        )
+
+
+def test_webhook_view_talk_preview_ready_acknowledged(rf, webhook_secret):
+    payload = {
+        "event": "talk.preview_ready",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        data = json.loads(response.content.decode("utf-8"))
+        assert data["status"] == "accepted"
 
 
 def test_webhook_view_talk_published_invalid_video_url_scheme(rf, webhook_secret):
