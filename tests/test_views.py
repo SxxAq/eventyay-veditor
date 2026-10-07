@@ -519,6 +519,33 @@ def test_signals_nav_registration():
     assert "veditor_nav_event_common" in common_uids
 
 
+def test_connect_view_post_sync_schedule_success(event, organizer_user, rf):
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={"action": "sync_schedule"},
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    with patch("veditor.views.VEditorClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.get_scoped_event_id.return_value = event.id
+        mock_client.sync_talks.return_value = {"status": "ok", "imported_count": 5}
+
+        view = ConnectView.as_view()
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+        assert response.status_code == 302
+        assert response.url == reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug})
+        assert mock_client.sync_talks.called
+        assert not mock_client.request_sso_jwt.called
+        messages = [str(m.message) for m in request._messages]
+        assert any("Successfully synchronized 5 talk(s) with VEditor" in m for m in messages)
+
+
 def test_connect_view_get_populates_rooms_in_room_form(event, organizer_user, rf):
     mock_room1 = SimpleNamespace(name="Main Hall")
     mock_room2 = SimpleNamespace(name="Workshop Room")
@@ -555,7 +582,7 @@ def test_connect_view_post_attach_room_recording_success(event, organizer_user, 
             data={
                 "action": "attach_room_recording",
                 "room": "Main Hall",
-                "source_path": "/media/ingest/main_hall.mp4",
+                "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
                 "recording_start": "2026-09-25T09:00:00Z",
             },
         )
@@ -567,6 +594,7 @@ def test_connect_view_post_attach_room_recording_success(event, organizer_user, 
     with patch("veditor.views.VEditorClient") as mock_client_cls:
         mock_client = mock_client_cls.return_value
         mock_client.get_scoped_event_id.return_value = event.id
+        mock_client.sync_talks.return_value = {"status": "ok"}
         mock_client.attach_room_recording.return_value = {
             "status": "ok",
             "attached_count": 3,
@@ -579,16 +607,64 @@ def test_connect_view_post_attach_room_recording_success(event, organizer_user, 
         response = view(request, organizer=event.organizer.slug, event=event.slug)
 
         assert response.status_code == 302
+        # Verify auto-sync ran prior to attachment
+        assert mock_client.sync_talks.called
         mock_client.attach_room_recording.assert_called_once_with(
             room="Main Hall",
             event_id=event.id,
-            source_path="/media/ingest/main_hall.mp4",
-            relative_key=None,
+            video_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            video_file=None,
             recording_start="2026-09-25T09:00:00Z",
         )
         messages = [str(m.message) for m in request._messages]
         assert any("Successfully attached room recording for room 'Main Hall'" in m for m in messages)
         assert any("3 talk(s) matched" in m for m in messages)
+
+
+def test_connect_view_post_attach_room_recording_with_file(event, organizer_user, rf):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    mock_room1 = SimpleNamespace(name="Main Hall")
+    mock_rooms = MagicMock()
+    mock_rooms.all.return_value.order_by.return_value = [mock_room1]
+    event.rooms = mock_rooms
+
+    uploaded_video = SimpleUploadedFile("hall_a.mp4", b"fake-video-bytes", content_type="video/mp4")
+
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "attach_room_recording",
+                "room": "Main Hall",
+                "video_file": uploaded_video,
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    with patch("veditor.views.VEditorClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.get_scoped_event_id.return_value = event.id
+        mock_client.sync_talks.return_value = {"status": "ok"}
+        mock_client.attach_room_recording.return_value = {
+            "status": "ok",
+            "attached_count": 2,
+            "room": "Main Hall",
+            "event_id": event.id,
+            "talk_ids": [10, 11],
+        }
+
+        view = ConnectView.as_view()
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+        assert response.status_code == 302
+        assert mock_client.attach_room_recording.called
+        call_kwargs = mock_client.attach_room_recording.call_args[1]
+        assert call_kwargs["room"] == "Main Hall"
+        assert call_kwargs["video_file"] is not None
 
 
 def test_connect_view_post_attach_room_recording_validation_error(event, organizer_user, rf):
@@ -630,7 +706,7 @@ def test_connect_view_post_attach_room_recording_api_error(event, organizer_user
             data={
                 "action": "attach_room_recording",
                 "room": "Main Hall",
-                "source_path": "/media/nonexistent.mp4",
+                "video_url": "https://vimeo.com/invalid",
             },
         )
     )
@@ -641,14 +717,15 @@ def test_connect_view_post_attach_room_recording_api_error(event, organizer_user
     with patch("veditor.views.VEditorClient") as mock_client_cls:
         mock_client = mock_client_cls.return_value
         mock_client.get_scoped_event_id.return_value = event.id
-        mock_client.attach_room_recording.side_effect = VEditorSyncError("File not found on shared storage")
+        mock_client.sync_talks.return_value = {"status": "ok"}
+        mock_client.attach_room_recording.side_effect = VEditorSyncError("Invalid stream URL")
 
         view = ConnectView.as_view()
         response = view(request, organizer=event.organizer.slug, event=event.slug)
 
         assert response.status_code == 302
         messages = [str(m.message) for m in request._messages]
-        assert any("Failed to attach room recording: File not found on shared storage" in m for m in messages)
+        assert any("Failed to attach room recording: Invalid stream URL" in m for m in messages)
 
 
 def test_connect_view_rendered_ui_unconfigured(event, organizer_user, rf):

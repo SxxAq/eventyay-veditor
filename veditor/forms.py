@@ -70,7 +70,7 @@ class VEditorSettingsForm(forms.Form):
 
 
 class RoomRecordingAttachmentForm(forms.Form):
-    """Form to attach a shared room recording file to scheduled talks in an event room."""
+    """Form to attach a room recording (via livestream/video URL or file upload) to scheduled talks."""
 
     room = forms.ChoiceField(
         label=_("Room"),
@@ -78,27 +78,27 @@ class RoomRecordingAttachmentForm(forms.Form):
         widget=forms.Select(attrs={"class": "form-control"}),
         help_text=_("Select the authoritative event room where this recording took place."),
     )
-    source_path = forms.CharField(
-        label=_("Recording Storage Path"),
+    video_url = forms.URLField(
+        label=_("Video / Livestream URL"),
         required=False,
-        widget=forms.TextInput(
+        widget=forms.URLInput(
             attrs={
                 "class": "form-control",
-                "placeholder": "/media/ingest/day1/hall_a.mp4",
+                "placeholder": "https://www.youtube.com/watch?v=... or https://vimeo.com/...",
             }
         ),
-        help_text=_("Absolute file path on shared storage or media mount accessible to VEditor."),
+        help_text=_("Public or unlisted livestream/video link (YouTube, Vimeo, or direct video stream URL)."),
     )
-    relative_key = forms.CharField(
-        label=_("Relative Ingest Key"),
+    video_file = forms.FileField(
+        label=_("Upload Video File"),
         required=False,
-        widget=forms.TextInput(
+        widget=forms.ClearableFileInput(
             attrs={
                 "class": "form-control",
-                "placeholder": "recordings/hall_a.mp4",
+                "accept": "video/*",
             }
         ),
-        help_text=_("Path relative to VEditor's configured ingest roots (if using ingest roots)."),
+        help_text=_("Select a local MP4, WebM, or video file to upload directly from your computer."),
     )
     recording_start = forms.CharField(
         label=_("Recording Start Time (Optional)"),
@@ -122,14 +122,17 @@ class RoomRecordingAttachmentForm(forms.Form):
 
     def clean(self) -> dict[str, Any]:
         cleaned_data = super().clean()
-        source_path = (cleaned_data.get("source_path") or "").strip()
-        relative_key = (cleaned_data.get("relative_key") or "").strip()
+        video_url = (cleaned_data.get("video_url") or "").strip()
+        video_file = cleaned_data.get("video_file")
         recording_start = (cleaned_data.get("recording_start") or "").strip()
 
-        if not source_path and not relative_key:
-            raise forms.ValidationError(_("You must specify either a Recording Storage Path or a Relative Ingest Key."))
+        if not video_url and not video_file:
+            raise forms.ValidationError(_("You must specify either a Video / Livestream URL or upload a Video File."))
 
-        cleaned_data["source_path"] = source_path
-        cleaned_data["relative_key"] = relative_key
+        if video_url and video_file:
+            raise forms.ValidationError(_("Please specify either a Video URL or upload a File, not both."))
+
+        cleaned_data["video_url"] = video_url
+        cleaned_data["video_file"] = video_file
         cleaned_data["recording_start"] = recording_start
         return cleaned_data

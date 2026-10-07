@@ -178,22 +178,55 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                 context["form"] = form
                 return self.render_to_response(context)
 
+        elif action == "sync_schedule":
+            talk_slots = self.get_talk_slots()
+            try:
+                client = VEditorClient(event=event)
+                target_event_id = client.get_scoped_event_id()
+                res = client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
+                imported_count = res.get("imported_count", len(talk_slots)) if isinstance(res, dict) else len(talk_slots)
+                messages.success(
+                    request,
+                    _("Successfully synchronized {count} talk(s) with VEditor.").format(count=imported_count),
+                )
+            except (VEditorError, ValueError) as exc:
+                logger.error("Failed to synchronize talks for event %s: %s", event.slug, exc)
+                messages.error(
+                    request,
+                    _("Failed to synchronize talks with VEditor: {error}").format(error=str(exc)),
+                )
+            return redirect(
+                reverse(
+                    "plugins:veditor:connect",
+                    kwargs={"organizer": event.organizer.slug, "event": event.slug},
+                )
+            )
+
         elif action == "attach_room_recording":
-            room_form = RoomRecordingAttachmentForm(request.POST, event=event)
+            room_form = RoomRecordingAttachmentForm(request.POST, request.FILES, event=event)
             if room_form.is_valid():
                 room_name = room_form.cleaned_data["room"]
-                source_path = room_form.cleaned_data["source_path"] or None
-                relative_key = room_form.cleaned_data["relative_key"] or None
+                video_url = room_form.cleaned_data.get("video_url") or None
+                video_file = room_form.cleaned_data.get("video_file") or None
                 recording_start = room_form.cleaned_data.get("recording_start") or None
 
                 try:
                     client = VEditorClient(event=event)
                     target_event_id = client.get_scoped_event_id()
+
+                    # 1. Automatically ensure talks & room schedules are synchronized first!
+                    talk_slots = self.get_talk_slots()
+                    try:
+                        client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
+                    except Exception as sync_exc:
+                        logger.warning("Auto-sync prior to room attachment failed for %s: %s", room_name, sync_exc)
+
+                    # 2. Attach recording via URL or uploaded file
                     res = client.attach_room_recording(
                         room=room_name,
                         event_id=target_event_id,
-                        source_path=source_path,
-                        relative_key=relative_key,
+                        video_url=video_url,
+                        video_file=video_file,
                         recording_start=recording_start,
                     )
                     attached_count = res.get("attached_count", 0) if isinstance(res, dict) else 0

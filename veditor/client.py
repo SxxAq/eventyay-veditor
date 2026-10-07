@@ -174,6 +174,12 @@ class VEditorClient:
         kwargs.setdefault("timeout", self.timeout)
         kwargs.setdefault("allow_redirects", False)
 
+        # Allow requests to generate multipart/form-data boundary headers when uploading files
+        if "files" in kwargs:
+            req_headers = dict(kwargs.get("headers") or {})
+            req_headers["Content-Type"] = None
+            kwargs["headers"] = req_headers
+
         try:
             response = self.session.request(method=method, url=url, **kwargs)
         except (requests.exceptions.Timeout, requests.exceptions.ConnectTimeout) as exc:
@@ -361,6 +367,8 @@ class VEditorClient:
         self,
         room: str,
         event_id: int | str | None = None,
+        video_url: str | None = None,
+        video_file: Any | None = None,
         relative_key: str | None = None,
         source_path: str | None = None,
         recording_start: str | datetime | None = None,
@@ -374,8 +382,10 @@ class VEditorClient:
         Args:
             room: Name of the room as configured in the schedule.
             event_id: Target event ID in VEditor. If None, auto-resolved via get_scoped_event_id().
-            relative_key: Path to recording file relative to VEditor's ingest roots.
-            source_path: Shared storage path to recording file accessible by VEditor.
+            video_url: External video / livestream URL (YouTube, Vimeo, or HTTP stream).
+            video_file: File-like object or tuple suitable for requests multipart upload.
+            relative_key: Optional path to recording file relative to VEditor's ingest roots.
+            source_path: Optional shared storage path to recording file accessible by VEditor.
             recording_start: Optional ISO-8601 string or datetime of when recording began.
 
         Returns:
@@ -384,9 +394,27 @@ class VEditorClient:
         if not room or not str(room).strip():
             raise ValueError("Room name is required to attach room recording.")
 
-        if not relative_key and not source_path:
-            raise ValueError("Either relative_key or source_path must be provided.")
+        if not any([video_url, video_file, relative_key, source_path]):
+            raise ValueError("Either video_url, video_file, relative_key, or source_path must be provided.")
 
+        rec_start_val: str | None = None
+        if recording_start is not None:
+            if isinstance(recording_start, datetime):
+                rec_start_val = recording_start.isoformat()
+            else:
+                rec_start_val = str(recording_start).strip()
+
+        # Handle multipart file upload
+        if video_file is not None:
+            data: dict[str, Any] = {"room": str(room).strip()}
+            if event_id is not None:
+                data["event_id"] = str(event_id)
+            if rec_start_val:
+                data["recording_start"] = rec_start_val
+            files = {"file": video_file}
+            return self._request("POST", "/talks/room/attach-recording", data=data, files=files)
+
+        # Handle JSON request for URL or file paths
         payload: dict[str, Any] = {"room": str(room).strip()}
 
         if event_id is not None:
@@ -395,16 +423,16 @@ class VEditorClient:
             except (ValueError, TypeError):
                 payload["event_id"] = event_id
 
+        if video_url:
+            payload["video_url"] = str(video_url).strip()
+
         if relative_key:
             payload["relative_key"] = str(relative_key).strip()
 
         if source_path:
             payload["source_path"] = str(source_path).strip()
 
-        if recording_start is not None:
-            if isinstance(recording_start, datetime):
-                payload["recording_start"] = recording_start.isoformat()
-            else:
-                payload["recording_start"] = str(recording_start).strip()
+        if rec_start_val:
+            payload["recording_start"] = rec_start_val
 
         return self._request("POST", "/talks/room/attach-recording", json=payload)
