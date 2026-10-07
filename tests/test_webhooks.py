@@ -497,6 +497,100 @@ def test_webhook_view_event_scoped_secret_with_numeric_slug(rf):
         assert mock_task.delay.called
 
 
+def test_webhook_view_fallback_event_secret_via_submission_external_id(rf):
+    event_secret = "event-secret-from-submission-999"
+    payload = {
+        "event": "talk.approved",
+        "talk_id": 101,
+        "event_id": "",
+        "external_id": "TALK-ABC-123",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(event_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    mock_event = SimpleNamespace(
+        id=77,
+        slug="conf-77",
+        settings=SimpleNamespace(get=lambda k, d=None: event_secret if k == "veditor_webhook_secret" else d),
+    )
+    mock_submission = SimpleNamespace(
+        code="TALK-ABC-123",
+        event=mock_event,
+    )
+
+    with (
+        patch("veditor.webhooks.settings") as mock_settings,
+        patch.dict("os.environ", {}, clear=True),
+        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
+        patch("eventyay.base.models.Submission.objects") as mock_sub_mgr,
+        patch("veditor.webhooks.process_talk_approved") as mock_task,
+    ):
+        mock_settings.VEDITOR_WEBHOOK_SECRET = None
+        mock_event_mgr.filter.return_value.first.return_value = None
+        mock_sub_mgr.filter.return_value.select_related.return_value.first.return_value = mock_submission
+
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        assert mock_task.delay.called
+
+
+def test_webhook_view_fallback_external_id_when_event_id_unmatched(rf):
+    event_secret = "event-secret-unmatched-id-resolved"
+    payload = {
+        "event": "talk.approved",
+        "talk_id": 101,
+        "event_id": 99999,
+        "external_id": "SUB-CODE-456",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(event_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    mock_event = SimpleNamespace(
+        id=55,
+        slug="conf-55",
+        settings=SimpleNamespace(get=lambda k, d=None: event_secret if k == "veditor_webhook_secret" else d),
+    )
+    mock_submission = SimpleNamespace(
+        code="SUB-CODE-456",
+        event=mock_event,
+    )
+
+    with (
+        patch("veditor.webhooks.settings") as mock_settings,
+        patch.dict("os.environ", {}, clear=True),
+        patch("eventyay.base.models.Event.objects") as mock_event_mgr,
+        patch("eventyay.base.models.Submission.objects") as mock_sub_mgr,
+        patch("veditor.webhooks.process_talk_approved") as mock_task,
+    ):
+        mock_settings.VEDITOR_WEBHOOK_SECRET = None
+        mock_event_mgr.filter.return_value.first.return_value = None
+        mock_sub_mgr.filter.return_value.select_related.return_value.first.return_value = mock_submission
+
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        assert mock_task.delay.called
+
+
 def test_webhook_view_event_lookup_db_error_returns_500(rf, webhook_secret):
     payload = {"talk_id": 101, "event_id": 42, "timestamp": time.time()}
     body = json.dumps(payload).encode("utf-8")

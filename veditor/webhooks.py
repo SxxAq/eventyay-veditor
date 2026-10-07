@@ -151,23 +151,49 @@ class WebhookView(View):
         # Resolve webhook shared secret: event-scoped secret takes precedence
         secret = None
         event_id = payload.get("event_id")
-        if event_id is not None and event_id != "":
-            try:
-                from eventyay.base.models import Event
+        external_id = payload.get("external_id")
+        try:
+            from eventyay.base.models import Event
 
-                event_obj = None
+            event_obj = None
+            if event_id is not None and event_id != "":
                 if str(event_id).isdigit():
                     event_obj = Event.objects.filter(id=int(event_id)).first()
                 if not event_obj:
                     event_obj = Event.objects.filter(slug=str(event_id)).first()
 
-                if event_obj and hasattr(event_obj, "settings"):
+            # Fallback: if event_id did not resolve directly, resolve via talk submission code (external_id)
+            if not event_obj and external_id:
+                try:
+                    try:
+                        from eventyay.base.models import Submission
+                    except ImportError:
+                        try:
+                            from eventyay.submission.models import Submission
+                        except ImportError:
+                            Submission = None
+
+                    if Submission is not None:
+                        submission = Submission.objects.filter(code=str(external_id)).select_related("event").first()
+                        if submission and submission.event:
+                            event_obj = submission.event
+                except Exception as sub_exc:  # noqa: BLE001
+                    logger.debug(
+                        "Failed looking up event via submission external_id %s: %s",
+                        external_id,
+                        sub_exc,
+                    )
+
+            if event_obj:
+                if event_id is None or event_id == "":
+                    event_id = event_obj.id
+                if hasattr(event_obj, "settings"):
                     secret = event_obj.settings.get("veditor_webhook_secret")
-            except DatabaseError as exc:
-                logger.error("Database error looking up event-level webhook secret for event %s: %s", event_id, exc)
-                return JsonResponse({"error": "Database error looking up event secret"}, status=500)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Failed looking up event-level webhook secret for event %s: %s", event_id, exc)
+        except DatabaseError as exc:
+            logger.error("Database error looking up event-level webhook secret for event %s: %s", event_id, exc)
+            return JsonResponse({"error": "Database error looking up event secret"}, status=500)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed looking up event-level webhook secret for event %s: %s", event_id, exc)
 
         if not secret:
             secret = (
