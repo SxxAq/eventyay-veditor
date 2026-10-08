@@ -115,7 +115,17 @@ class RoomRecordingAttachmentForm(forms.Form):
     def __init__(self, *args: Any, event: Any = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         if event is not None and hasattr(event, "rooms"):
-            rooms = list(event.rooms.all().order_by("name"))
+            try:
+                from django_scopes import scope
+            except ImportError:
+                scope = None
+
+            if scope:
+                with scope(event=event):
+                    rooms = list(event.rooms.all().order_by("name"))
+            else:
+                rooms = list(event.rooms.all().order_by("name"))
+
             self.fields["room"].choices = [(r.name, r.name) for r in rooms]
             if not self.fields["room"].choices:
                 self.fields["room"].choices = [("", _("No rooms found for this event"))]
@@ -131,6 +141,15 @@ class RoomRecordingAttachmentForm(forms.Form):
 
         if video_url and video_file:
             raise forms.ValidationError(_("Please specify either a Video URL or upload a File, not both."))
+
+        if recording_start:
+            from datetime import datetime
+            try:
+                # Replace 'Z' with '+00:00' to support standard ISO-8601 UTC notation
+                normalized_dt = recording_start.replace("Z", "+00:00") if recording_start.endswith("Z") else recording_start
+                datetime.fromisoformat(normalized_dt)
+            except ValueError:
+                self.add_error("recording_start", _("Recording start time must be a valid ISO-8601 formatted timestamp (e.g., 2026-09-25T09:00:00Z)."))
 
         cleaned_data["video_url"] = video_url
         cleaned_data["video_file"] = video_file

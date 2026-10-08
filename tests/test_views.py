@@ -591,34 +591,71 @@ def test_connect_view_post_attach_room_recording_success(event, organizer_user, 
     request.event = event
     request.organizer = event.organizer
 
+    distinct_veditor_event_id = 98765
     with patch("veditor.views.VEditorClient") as mock_client_cls:
         mock_client = mock_client_cls.return_value
-        mock_client.get_scoped_event_id.return_value = event.id
+        mock_client.get_scoped_event_id.return_value = distinct_veditor_event_id
         mock_client.sync_talks.return_value = {"status": "ok"}
         mock_client.attach_room_recording.return_value = {
             "status": "ok",
             "attached_count": 3,
             "room": "Main Hall",
-            "event_id": event.id,
-            "talk_ids": [1, 2, 3],
+            "event_id": distinct_veditor_event_id,
+            "talk_ids": [101, 102, 103],
         }
 
         view = ConnectView.as_view()
         response = view(request, organizer=event.organizer.slug, event=event.slug)
 
         assert response.status_code == 302
-        # Verify auto-sync ran prior to attachment
-        assert mock_client.sync_talks.called
+        # Verify auto-sync ran prior to attachment and used the resolved scoped event ID
+        assert mock_client.get_scoped_event_id.called
+        mock_client.sync_talks.assert_called_once_with(event_id=distinct_veditor_event_id, talk_slots=[])
         mock_client.attach_room_recording.assert_called_once_with(
             room="Main Hall",
-            event_id=event.id,
+            event_id=distinct_veditor_event_id,
             video_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             video_file=None,
             recording_start="2026-09-25T09:00:00Z",
         )
         messages = [str(m.message) for m in request._messages]
         assert any("Successfully attached room recording for room 'Main Hall'" in m for m in messages)
-        assert any("3 talk(s) matched" in m for m in messages)
+        assert any("IDs: 101, 102, 103" in m for m in messages)
+
+
+def test_connect_view_post_attach_room_recording_sync_failure_stops_attachment(event, organizer_user, rf):
+    mock_room1 = SimpleNamespace(name="Main Hall")
+    mock_rooms = MagicMock()
+    mock_rooms.all.return_value.order_by.return_value = [mock_room1]
+    event.rooms = mock_rooms
+
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "attach_room_recording",
+                "room": "Main Hall",
+                "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    with patch("veditor.views.VEditorClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.get_scoped_event_id.return_value = 1234
+        mock_client.sync_talks.side_effect = VEditorSyncError("Network timeout during talk sync")
+
+        view = ConnectView.as_view()
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+        assert response.status_code == 302
+        assert mock_client.sync_talks.called
+        assert not mock_client.attach_room_recording.called
+        messages = [str(m.message) for m in request._messages]
+        assert any("Failed to synchronize schedule prior to attaching recording" in m for m in messages)
 
 
 def test_connect_view_post_attach_room_recording_with_file(event, organizer_user, rf):

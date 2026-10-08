@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from typing import Any
@@ -11,6 +12,8 @@ import requests
 from django.conf import settings
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+logger = logging.getLogger(__name__)
 
 from .exceptions import (
     VEditorAuthError,
@@ -394,8 +397,32 @@ class VEditorClient:
         if not room or not str(room).strip():
             raise ValueError("Room name is required to attach room recording.")
 
-        if not any([video_url, video_file, relative_key, source_path]):
+        clean_url = str(video_url).strip() if video_url else None
+        clean_rel = str(relative_key).strip() if relative_key else None
+        clean_src = str(source_path).strip() if source_path else None
+
+        provided_sources = [
+            name for name, val in [
+                ("video_url", clean_url),
+                ("video_file", video_file),
+                ("relative_key", clean_rel),
+                ("source_path", clean_src),
+            ]
+            if val is not None and (val != "" if isinstance(val, str) else True)
+        ]
+
+        if not provided_sources:
             raise ValueError("Either video_url, video_file, relative_key, or source_path must be provided.")
+        if len(provided_sources) > 1:
+            raise ValueError(
+                f"Conflicting recording sources provided: {', '.join(provided_sources)}. Please specify only one recording source."
+            )
+
+        if event_id is None:
+            try:
+                event_id = self.get_scoped_event_id()
+            except Exception as exc:
+                logger.debug("Could not auto-resolve scoped event ID: %s", exc)
 
         rec_start_val: str | None = None
         if recording_start is not None:
@@ -423,14 +450,14 @@ class VEditorClient:
             except (ValueError, TypeError):
                 payload["event_id"] = event_id
 
-        if video_url:
-            payload["video_url"] = str(video_url).strip()
+        if clean_url:
+            payload["video_url"] = clean_url
 
-        if relative_key:
-            payload["relative_key"] = str(relative_key).strip()
+        if clean_rel:
+            payload["relative_key"] = clean_rel
 
-        if source_path:
-            payload["source_path"] = str(source_path).strip()
+        if clean_src:
+            payload["source_path"] = clean_src
 
         if rec_start_val:
             payload["recording_start"] = rec_start_val

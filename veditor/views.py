@@ -96,7 +96,18 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         if "room_form" not in context:
             context["room_form"] = RoomRecordingAttachmentForm(event=event)
 
-        rooms_list = list(event.rooms.all().order_by("name")) if hasattr(event, "rooms") else []
+        rooms_list = []
+        if hasattr(event, "rooms"):
+            try:
+                from django_scopes import scope
+            except ImportError:
+                scope = None
+
+            if scope:
+                with scope(event=event):
+                    rooms_list = list(event.rooms.all().order_by("name"))
+            else:
+                rooms_list = list(event.rooms.all().order_by("name"))
         context["rooms"] = rooms_list
         context["rooms_count"] = len(rooms_list)
 
@@ -219,7 +230,17 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     try:
                         client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
                     except Exception as sync_exc:
-                        logger.warning("Auto-sync prior to room attachment failed for %s: %s", room_name, sync_exc)
+                        logger.error("Auto-sync prior to room attachment failed for %s: %s", room_name, sync_exc)
+                        messages.error(
+                            request,
+                            _("Failed to synchronize schedule prior to attaching recording: {error}").format(error=str(sync_exc)),
+                        )
+                        return redirect(
+                            reverse(
+                                "plugins:veditor:connect",
+                                kwargs={"organizer": event.organizer.slug, "event": event.slug},
+                            )
+                        )
 
                     # 2. Attach recording via URL or uploaded file
                     res = client.attach_room_recording(
@@ -230,12 +251,17 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                         recording_start=recording_start,
                     )
                     attached_count = res.get("attached_count", 0) if isinstance(res, dict) else 0
-                    messages.success(
-                        request,
-                        _("Successfully attached room recording for room '{room}'. {count} talk(s) matched and queued for detection and cutting.").format(
+                    talk_ids = res.get("talk_ids", []) if isinstance(res, dict) else []
+                    if talk_ids:
+                        talk_ids_str = ", ".join(str(tid) for tid in talk_ids)
+                        msg = _("Successfully attached room recording for room '{room}'. {count} talk(s) matched (IDs: {talk_ids}) and queued for detection and cutting.").format(
+                            room=room_name, count=attached_count, talk_ids=talk_ids_str
+                        )
+                    else:
+                        msg = _("Successfully attached room recording for room '{room}'. {count} talk(s) matched and queued for detection and cutting.").format(
                             room=room_name, count=attached_count
-                        ),
-                    )
+                        )
+                    messages.success(request, msg)
                 except (VEditorError, ValueError) as exc:
                     logger.error("Failed attaching room recording for room %s: %s", room_name, exc)
                     messages.error(

@@ -870,3 +870,45 @@ def test_attach_room_recording_validation_errors():
     # Missing all media sources
     with pytest.raises(ValueError, match="Either video_url, video_file, relative_key, or source_path must be provided"):
         client.attach_room_recording(room="Main Hall")
+
+    # Whitespace only paths
+    with pytest.raises(ValueError, match="Either video_url, video_file, relative_key, or source_path must be provided"):
+        client.attach_room_recording(room="Main Hall", relative_key="   ", source_path=" ")
+
+    # Conflicting multiple sources
+    with pytest.raises(ValueError, match="Conflicting recording sources provided"):
+        client.attach_room_recording(
+            room="Main Hall",
+            video_url="https://youtube.com/watch?v=123",
+            source_path="/media/file.mp4",
+        )
+
+
+@responses.activate
+def test_attach_room_recording_omitted_event_id_auto_resolves():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[{"id": 777, "name": "Event 777"}],
+        status=200,
+    )
+    responses.add(
+        responses.POST,
+        "https://veditor.test/talks/room/attach-recording",
+        json={"status": "ok", "attached_count": 1, "room": "Room A", "event_id": 777, "talk_ids": [10]},
+        status=200,
+    )
+
+    # Calling attach_room_recording with event_id=None
+    result = client.attach_room_recording(
+        room="Room A",
+        event_id=None,
+        video_url="https://youtube.com/watch?v=abc",
+    )
+
+    assert result["status"] == "ok"
+    assert result["event_id"] == 777
+    post_req = [c for c in responses.calls if c.request.method == "POST"][0]
+    req_body = json.loads(post_req.request.body)
+    assert req_body["event_id"] == 777
