@@ -144,10 +144,16 @@ class RoomRecordingAttachmentForm(forms.Form):
 
         if recording_start:
             from datetime import datetime
+
             try:
                 # Replace 'Z' with '+00:00' to support standard ISO-8601 UTC notation
                 normalized_dt = recording_start.replace("Z", "+00:00") if recording_start.endswith("Z") else recording_start
-                datetime.fromisoformat(normalized_dt)
+                parsed_dt = datetime.fromisoformat(normalized_dt)
+                if parsed_dt.tzinfo is None:
+                    self.add_error(
+                        "recording_start",
+                        _("Recording start time must include a timezone offset (e.g., 2026-09-25T09:00:00Z or +02:00)."),
+                    )
             except ValueError:
                 self.add_error("recording_start", _("Recording start time must be a valid ISO-8601 formatted timestamp (e.g., 2026-09-25T09:00:00Z)."))
 

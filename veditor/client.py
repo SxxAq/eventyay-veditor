@@ -402,7 +402,8 @@ class VEditorClient:
         clean_src = str(source_path).strip() if source_path else None
 
         provided_sources = [
-            name for name, val in [
+            name
+            for name, val in [
                 ("video_url", clean_url),
                 ("video_file", video_file),
                 ("relative_key", clean_rel),
@@ -414,9 +415,7 @@ class VEditorClient:
         if not provided_sources:
             raise ValueError("Either video_url, video_file, relative_key, or source_path must be provided.")
         if len(provided_sources) > 1:
-            raise ValueError(
-                f"Conflicting recording sources provided: {', '.join(provided_sources)}. Please specify only one recording source."
-            )
+            raise ValueError(f"Conflicting recording sources provided: {', '.join(provided_sources)}. Please specify only one recording source.")
 
         if event_id is None:
             try:

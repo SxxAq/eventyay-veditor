@@ -822,3 +822,47 @@ def test_connect_view_rendered_ui_configured(event, organizer_user, rf):
     assert "veditor-dashboard-hero" not in source
     assert "Open Studio without Sync" not in source
     assert "Zero-Config Target Event" not in source
+
+
+def test_room_recording_attachment_form_recording_start_timezone_validation(event):
+    from veditor.forms import RoomRecordingAttachmentForm
+
+    mock_room = SimpleNamespace(name="Main Hall")
+    mock_rooms = MagicMock()
+    mock_rooms.all.return_value.order_by.return_value = [mock_room]
+    event.rooms = mock_rooms
+
+    # Naive timestamp without timezone offset should be rejected
+    form_naive = RoomRecordingAttachmentForm(
+        event=event,
+        data={
+            "room": "Main Hall",
+            "video_url": "https://example.com/video.mp4",
+            "recording_start": "2026-09-25T09:00:00",
+        },
+    )
+    assert not form_naive.is_valid()
+    assert "recording_start" in form_naive.errors
+    assert "must include a timezone offset" in str(form_naive.errors["recording_start"])
+
+    # Timezone-aware timestamp with UTC 'Z' should be accepted
+    form_utc = RoomRecordingAttachmentForm(
+        event=event,
+        data={
+            "room": "Main Hall",
+            "video_url": "https://example.com/video.mp4",
+            "recording_start": "2026-09-25T09:00:00Z",
+        },
+    )
+    assert form_utc.is_valid()
+
+    # Timezone-aware timestamp with explicit offset should be accepted
+    form_offset = RoomRecordingAttachmentForm(
+        event=event,
+        data={
+            "room": "Main Hall",
+            "video_url": "https://example.com/video.mp4",
+            "recording_start": "2026-09-25T09:00:00+02:00",
+        },
+    )
+    assert form_offset.is_valid()

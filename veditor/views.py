@@ -254,9 +254,10 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     talk_ids = res.get("talk_ids", []) if isinstance(res, dict) else []
                     if talk_ids:
                         talk_ids_str = ", ".join(str(tid) for tid in talk_ids)
-                        msg = _("Successfully attached room recording for room '{room}'. {count} talk(s) matched (IDs: {talk_ids}) and queued for detection and cutting.").format(
-                            room=room_name, count=attached_count, talk_ids=talk_ids_str
-                        )
+                        msg = _(
+                            "Successfully attached room recording for room '{room}'. "
+                            "{count} talk(s) matched (IDs: {talk_ids}) and queued for detection and cutting."
+                        ).format(room=room_name, count=attached_count, talk_ids=talk_ids_str)
                     else:
                         msg = _("Successfully attached room recording for room '{room}'. {count} talk(s) matched and queued for detection and cutting.").format(
                             room=room_name, count=attached_count
