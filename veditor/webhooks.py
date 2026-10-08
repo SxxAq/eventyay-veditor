@@ -171,8 +171,8 @@ class WebhookView(View):
                     if not event_obj:
                         event_obj = Event.objects.filter(slug=str(query_event)).first()
 
-            # Fallback 2: if event did not resolve directly, resolve via talk submission code (external_id)
-            if not event_obj and external_id:
+            # Fallback 2: resolve or verify event via talk submission code (external_id)
+            if external_id:
                 try:
                     try:
                         from eventyay.base.models import Submission
@@ -183,7 +183,17 @@ class WebhookView(View):
                             Submission = None
 
                     if Submission is not None:
-                        submission = Submission.objects.filter(code=str(external_id)).select_related("event").first()
+                        try:
+                            from django_scopes import scopes_disabled
+                        except ImportError:
+                            scopes_disabled = None
+
+                        if scopes_disabled:
+                            with scopes_disabled():
+                                submission = Submission.objects.filter(code=str(external_id)).select_related("event").first()
+                        else:
+                            submission = Submission.objects.filter(code=str(external_id)).select_related("event").first()
+
                         if submission and submission.event:
                             event_obj = submission.event
                 except DatabaseError:
@@ -243,14 +253,20 @@ class WebhookView(View):
             if not raw_url or not isinstance(raw_url, str) or not raw_url.strip():
                 return JsonResponse({"error": "Missing or invalid video_url for talk.published event"}, status=400)
             video_url = raw_url.strip()
+            if video_url.startswith("//"):
+                return JsonResponse({"error": "Protocol-relative video_url is not allowed"}, status=400)
             if video_url.startswith("/"):
                 base_url = (
                     (event_obj.settings.get("veditor_api_base_url") if event_obj and hasattr(event_obj, "settings") else None)
                     or getattr(settings, "VEDITOR_API_BASE_URL", None)
                     or os.environ.get("VEDITOR_API_BASE_URL")
-                    or "http://localhost:8080"
-                ).rstrip("/")
-                video_url = f"{base_url}{video_url}"
+                )
+                if not base_url or not str(base_url).strip():
+                    return JsonResponse({"error": "Cannot resolve relative video_url: VEditor base URL is not configured"}, status=400)
+                parsed_base = urlparse(str(base_url).strip())
+                if parsed_base.scheme not in ("http", "https") or not parsed_base.netloc:
+                    return JsonResponse({"error": "Configured VEditor base URL is invalid"}, status=400)
+                video_url = f"{parsed_base.scheme}://{parsed_base.netloc}{video_url}"
 
             parsed_video = urlparse(video_url)
             if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:

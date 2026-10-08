@@ -332,14 +332,16 @@ def test_connect_view_get_inbound_webhook_context(event, organizer_user, rf):
 
     assert response.status_code == 200
     assert "inbound_webhook_url" in response.context_data
-    assert "/webhook/" in response.context_data["inbound_webhook_url"]
-    assert f"?event={event.slug}" in response.context_data["inbound_webhook_url"]
+    expected_url = request.build_absolute_uri(reverse("plugins:veditor:webhook")) + f"?event={event.slug}"
+    assert response.context_data["inbound_webhook_url"] == expected_url
     assert response.context_data["veditor_webhook_secret_configured"] is False
+    assert response.context_data["has_event_scoped_secret"] is False
 
     # Now with webhook secret configured
     event.settings.set("veditor_webhook_secret", "secret-xyz")
     response2 = view(request, organizer=event.organizer.slug, event=event.slug)
     assert response2.context_data["veditor_webhook_secret_configured"] is True
+    assert response2.context_data["has_event_scoped_secret"] is True
 
 
 def test_connect_view_post_with_auto_event_id(event, organizer_user, rf):

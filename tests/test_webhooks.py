@@ -1255,6 +1255,104 @@ def test_webhook_view_talk_published_relative_video_url(rf, webhook_secret):
         )
 
 
+def test_webhook_view_talk_published_protocol_relative_video_url_rejected(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "video_url": "//malicious.example.com/exploit.mp4",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "Protocol-relative video_url is not allowed" in data["error"]
+
+
+def test_webhook_view_talk_published_relative_video_url_without_base_url_rejected(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "video_url": "/studio/media/42/final/final.mp4",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        mock_settings.VEDITOR_API_BASE_URL = None
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "VEditor base URL is not configured" in data["error"]
+
+
+def test_webhook_view_talk_published_relative_video_url_origin_resolution(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "video_url": "/studio/media/42/final/final.mp4",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with (
+        patch("veditor.webhooks.settings") as mock_settings,
+        patch("veditor.webhooks.process_talk_published") as mock_task,
+    ):
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        mock_settings.VEDITOR_API_BASE_URL = "https://editor.example.com/api/v1/"
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 200
+        # Root-relative path /studio/... resolves against origin https://editor.example.com
+        mock_task.delay.assert_called_once_with(
+            event_id=10,
+            talk_id=42,
+            video_url="https://editor.example.com/studio/media/42/final/final.mp4",
+            external_id="ABCDE",
+            raw_payload=payload,
+        )
+
+
 def test_webhook_view_talk_preview_ready_acknowledged(rf, webhook_secret):
     payload = {
         "event": "talk.preview_ready",

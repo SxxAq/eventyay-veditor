@@ -202,9 +202,13 @@
                         <span class="label label-success veditor-label-connected">
                             <i class="fa fa-check"></i> {% trans "Connected" %}
                         </span>
-                        {% if veditor_webhook_secret_configured %}
+                        {% if has_event_scoped_secret %}
                             <span class="label label-info veditor-label-webhook" title="{% trans 'Event-scoped webhook signature verification active' %}">
-                                <i class="fa fa-shield"></i> {% trans "Webhook Secret Configured" %}
+                                <i class="fa fa-shield"></i> {% trans "Event Webhook Secret Configured" %}
+                            </span>
+                        {% elif has_global_secret %}
+                            <span class="label label-info veditor-label-webhook" title="{% trans 'Global webhook signature verification active' %}">
+                                <i class="fa fa-shield"></i> {% trans "Global Webhook Secret Configured" %}
                             </span>
                         {% else %}
                             <span class="label label-default veditor-label-webhook" title="{% trans 'Configure a shared webhook secret to verify signatures' %}">
@@ -233,7 +237,7 @@
                             <div class="input-group input-group-sm veditor-webhook-input-group">
                                 <input type="text" class="form-control code" id="inbound-webhook-url" value="{{ inbound_webhook_url }}" readonly>
                                 <span class="input-group-btn">
-                                    <button class="btn btn-default" type="button" id="btn-copy-webhook-url" onclick="navigator.clipboard.writeText(document.getElementById('inbound-webhook-url').value); alert('{% trans "Copied webhook endpoint URL to clipboard!" %}');">
+                                    <button class="btn btn-default" type="button" id="btn-copy-webhook-url" data-copied-msg="{% trans "Copied webhook endpoint URL to clipboard!" %}" onclick="var btn=this; if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(document.getElementById('inbound-webhook-url').value).then(function() { alert(btn.getAttribute('data-copied-msg')); }).catch(function() {}); }">
                                         <i class="fa fa-copy"></i> {% trans "Copy" %}
                                     </button>
                                 </span>

@@ -84,8 +84,14 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         )
         saved_key = (event.settings.get("veditor_api_key") if hasattr(event, "settings") else None) or os.environ.get("VEDITOR_API_KEY")
         has_saved_key = bool(saved_key)
-        saved_secret = (event.settings.get("veditor_webhook_secret") if hasattr(event, "settings") else None) or os.environ.get("VEDITOR_WEBHOOK_SECRET")
-        has_saved_secret = bool(saved_secret)
+        has_event_secret = bool(event.settings.get("veditor_webhook_secret")) if hasattr(event, "settings") else False
+        global_secret = (
+            getattr(settings, "VEDITOR_WEBHOOK_SECRET", None)
+            or os.environ.get("VEDITOR_WEBHOOK_SECRET")
+            or os.environ.get("EVENTYAY_VEDITOR_WEBHOOK_SECRET")
+        )
+        has_global_secret = bool(global_secret)
+        has_saved_secret = bool(has_event_secret or has_global_secret)
 
         if "form" not in context:
             context["form"] = VEditorSettingsForm(
@@ -93,7 +99,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     "veditor_api_base_url": saved_url,
                 },
                 has_existing_key=has_saved_key,
-                has_existing_secret=has_saved_secret,
+                has_existing_secret=has_event_secret,
             )
 
         try:
@@ -116,6 +122,8 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             context["inbound_webhook_url"] = f"{base_webhook_url}{sep}event={event_slug}"
         else:
             context["inbound_webhook_url"] = base_webhook_url
+        context["has_event_scoped_secret"] = has_event_secret
+        context["has_global_secret"] = has_global_secret
         context["veditor_webhook_secret_configured"] = has_saved_secret
 
         return context
@@ -161,14 +169,13 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         action = request.POST.get("action")
         saved_key = (event.settings.get("veditor_api_key") if hasattr(event, "settings") else None) or os.environ.get("VEDITOR_API_KEY")
         has_saved_key = bool(saved_key)
-        saved_secret = (event.settings.get("veditor_webhook_secret") if hasattr(event, "settings") else None) or os.environ.get("VEDITOR_WEBHOOK_SECRET")
-        has_saved_secret = bool(saved_secret)
+        has_event_secret = bool(event.settings.get("veditor_webhook_secret")) if hasattr(event, "settings") else False
 
         if action == "save_settings":
             form = VEditorSettingsForm(
                 request.POST,
                 has_existing_key=has_saved_key,
-                has_existing_secret=has_saved_secret,
+                has_existing_secret=has_event_secret,
             )
             if form.is_valid():
                 if hasattr(event, "settings"):
