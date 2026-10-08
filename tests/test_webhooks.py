@@ -1353,6 +1353,36 @@ def test_webhook_view_talk_published_relative_video_url_origin_resolution(rf, we
         )
 
 
+def test_webhook_view_talk_published_relative_video_url_credentials_rejected(rf, webhook_secret):
+    payload = {
+        "event": "talk.published",
+        "talk_id": 42,
+        "event_id": 10,
+        "external_id": "ABCDE",
+        "video_url": "/studio/media/42/final/final.mp4",
+        "timestamp": time.time(),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    sig = generate_signature(webhook_secret, body)
+
+    request = rf.post(
+        reverse("plugins:veditor:webhook"),
+        data=body,
+        content_type="application/json",
+        HTTP_X_VEDITOR_SIGNATURE=sig,
+    )
+
+    with patch("veditor.webhooks.settings") as mock_settings:
+        mock_settings.VEDITOR_WEBHOOK_SECRET = webhook_secret
+        mock_settings.VEDITOR_API_BASE_URL = "https://user:pass@editor.example.com"
+        view = WebhookView.as_view()
+        response = view(request)
+
+        assert response.status_code == 400
+        data = json.loads(response.content.decode("utf-8"))
+        assert "must not contain credentials" in data["error"]
+
+
 def test_webhook_view_talk_preview_ready_acknowledged(rf, webhook_secret):
     payload = {
         "event": "talk.preview_ready",

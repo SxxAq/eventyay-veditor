@@ -86,9 +86,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         has_saved_key = bool(saved_key)
         has_event_secret = bool(event.settings.get("veditor_webhook_secret")) if hasattr(event, "settings") else False
         global_secret = (
-            getattr(settings, "VEDITOR_WEBHOOK_SECRET", None)
-            or os.environ.get("VEDITOR_WEBHOOK_SECRET")
-            or os.environ.get("EVENTYAY_VEDITOR_WEBHOOK_SECRET")
+            getattr(settings, "VEDITOR_WEBHOOK_SECRET", None) or os.environ.get("VEDITOR_WEBHOOK_SECRET") or os.environ.get("EVENTYAY_VEDITOR_WEBHOOK_SECRET")
         )
         has_global_secret = bool(global_secret)
         has_saved_secret = bool(has_event_secret or has_global_secret)

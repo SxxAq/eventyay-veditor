@@ -266,6 +266,8 @@ class WebhookView(View):
                 parsed_base = urlparse(str(base_url).strip())
                 if parsed_base.scheme not in ("http", "https") or not parsed_base.netloc:
                     return JsonResponse({"error": "Configured VEditor base URL is invalid"}, status=400)
+                if parsed_base.username is not None or parsed_base.password is not None:
+                    return JsonResponse({"error": "Configured VEditor base URL must not contain credentials"}, status=400)
                 video_url = f"{parsed_base.scheme}://{parsed_base.netloc}{video_url}"
 
             parsed_video = urlparse(video_url)
