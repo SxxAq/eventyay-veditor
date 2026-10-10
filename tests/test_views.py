@@ -658,6 +658,36 @@ def test_connect_view_post_attach_room_recording_sync_failure_stops_attachment(e
         assert any("Failed to synchronize schedule prior to attaching recording" in m for m in messages)
 
 
+def test_connect_view_post_attach_room_recording_unexpected_sync_failure_propagates(event, organizer_user, rf):
+    mock_room1 = SimpleNamespace(name="Main Hall")
+    mock_rooms = MagicMock()
+    mock_rooms.all.return_value.order_by.return_value = [mock_room1]
+    event.rooms = mock_rooms
+
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "attach_room_recording",
+                "room": "Main Hall",
+                "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    with patch("veditor.views.VEditorClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.get_scoped_event_id.return_value = 1234
+        mock_client.sync_talks.side_effect = RuntimeError("Unexpected internal crash")
+
+        view = ConnectView.as_view()
+        with pytest.raises(RuntimeError, match="Unexpected internal crash"):
+            view(request, organizer=event.organizer.slug, event=event.slug)
+
+
 def test_connect_view_post_attach_room_recording_with_file(event, organizer_user, rf):
     from django.core.files.uploadedfile import SimpleUploadedFile
 

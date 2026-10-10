@@ -229,7 +229,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     talk_slots = self.get_talk_slots()
                     try:
                         client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
-                    except Exception as sync_exc:
+                    except (VEditorError, ValueError) as sync_exc:
                         logger.error("Auto-sync prior to room attachment failed for %s: %s", room_name, sync_exc)
                         messages.error(
                             request,
