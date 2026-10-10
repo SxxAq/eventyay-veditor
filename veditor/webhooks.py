@@ -10,7 +10,7 @@ import os
 import time
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from django.conf import settings
 from django.db import DatabaseError
@@ -79,6 +79,12 @@ def verify_hmac_signature(
             received_sig = parts["v1"]
         elif "sha256" in parts:
             received_sig = parts["sha256"]
+
+    if "t" in parts and not parts.get("v1"):
+        return False
+
+    if "v1" in parts and header_ts is None:
+        return False
 
     # If header had a timestamp and caller didn't supply one, use header timestamp
     effective_ts = timestamp if timestamp is not None else header_ts
@@ -150,12 +156,12 @@ class WebhookView(View):
 
         # Resolve webhook shared secret: event-scoped secret takes precedence
         secret = None
+        event_obj = None
         event_id = payload.get("event_id")
         external_id = payload.get("external_id")
         try:
             from eventyay.base.models import Event
 
-            event_obj = None
             if event_id is not None and event_id != "":
                 if str(event_id).isdigit():
                     event_obj = Event.objects.filter(id=int(event_id)).first()
@@ -272,7 +278,52 @@ class WebhookView(View):
 
             parsed_video = urlparse(video_url)
             if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:
-                return JsonResponse({"error": "video_url must be a valid HTTP or HTTPS URL with host"}, status=400)
+                if (video_url.startswith("/") and not video_url.startswith("//")) or (not parsed_video.scheme and not parsed_video.netloc):
+                    resolved_base = None
+                    try:
+                        from .client import VEditorClient
+
+                        resolved_base = VEditorClient.resolve_base_url(event=event_obj)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Failed resolving client base URL for talk.published: event_id=%s, error=%s",
+                            event_id,
+                            exc,
+                            exc_info=True,
+                        )
+
+                    if not resolved_base and getattr(settings, "configured", False):
+                        resolved_base = getattr(settings, "VEDITOR_API_BASE_URL", None) or getattr(settings, "VEDITOR_BASE_URL", None)
+
+                    if not resolved_base:
+                        resolved_base = os.environ.get("VEDITOR_API_BASE_URL") or os.environ.get("VEDITOR_BASE_URL")
+
+                    if not resolved_base:
+                        try:
+                            from .client import VEditorClient
+
+                            client = VEditorClient(event=event_obj)
+                            resolved_base = client.base_url
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "Failed resolving client instance base URL for event_id=%s in webhook: %s",
+                                event_id,
+                                exc,
+                                exc_info=True,
+                            )
+
+                    if resolved_base and str(resolved_base).strip():
+                        video_url = urljoin(str(resolved_base).strip().rstrip("/") + "/", video_url.lstrip("/"))
+                        parsed_video = urlparse(video_url)
+
+                if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:
+                    logger.warning(
+                        "Rejected talk.published webhook due to invalid or unresolvable video_url: event_id=%s, talk_id=%s, video_url=%r",
+                        event_id,
+                        talk_id,
+                        video_url,
+                    )
+                    return JsonResponse({"error": "video_url must be a valid HTTP or HTTPS URL with host"}, status=400)
 
             if external_id is None or not str(external_id).strip():
                 return JsonResponse({"error": "Missing or invalid external_id for talk.published event"}, status=400)

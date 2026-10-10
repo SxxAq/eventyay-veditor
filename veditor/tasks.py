@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from django.conf import settings
 from django.core.cache import cache
@@ -370,7 +371,8 @@ def process_talk_published(
 
     video_url = video_url.strip()
     parsed_video = urlparse(video_url)
-    if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:
+    is_relative = (video_url.startswith("/") and not video_url.startswith("//")) or (not parsed_video.scheme and not parsed_video.netloc)
+    if (parsed_video.scheme not in ("http", "https") or not parsed_video.netloc) and not is_relative:
         logger.warning("Empty or invalid video_url received for talk.published: %r", video_url)
         return {
             "status": "error",
@@ -409,6 +411,42 @@ def process_talk_published(
                     "event_id": event_id,
                     "talk_id": talk_id,
                     "external_id": external_id,
+                }
+
+            if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:
+                if (video_url.startswith("/") and not video_url.startswith("//")) or (not parsed_video.scheme and not parsed_video.netloc):
+                    resolved_base = None
+                    try:
+                        resolved_base = VEditorClient.resolve_base_url(event=event_obj)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Failed resolving base URL via VEditorClient for event_id=%s: %s",
+                            event_id,
+                            exc,
+                            exc_info=True,
+                        )
+                    if not resolved_base and event_obj is not None and hasattr(event_obj, "settings"):
+                        resolved_base = event_obj.settings.get("veditor_api_base_url") or event_obj.settings.get("veditor_base_url")
+                    if not resolved_base and getattr(settings, "configured", False):
+                        resolved_base = getattr(settings, "VEDITOR_API_BASE_URL", None) or getattr(settings, "VEDITOR_BASE_URL", None)
+                    if not resolved_base:
+                        resolved_base = os.environ.get("VEDITOR_API_BASE_URL") or os.environ.get("VEDITOR_BASE_URL")
+                    if resolved_base and str(resolved_base).strip():
+                        video_url = urljoin(str(resolved_base).strip().rstrip("/") + "/", video_url.lstrip("/"))
+                        parsed_video = urlparse(video_url)
+
+            if parsed_video.scheme not in ("http", "https") or not parsed_video.netloc:
+                logger.warning(
+                    "Rejected talk.published in task due to unresolvable video_url: event_id=%s, talk_id=%s, video_url=%r",
+                    event_id,
+                    talk_id,
+                    video_url,
+                )
+                return {
+                    "status": "error",
+                    "message": "Missing or invalid video_url scheme/host",
+                    "event_id": event_id,
+                    "talk_id": talk_id,
                 }
 
             # 2. Resolve submission strictly scoped to event_obj
@@ -555,7 +593,12 @@ def process_talk_published(
         )
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.error("Failed processing talk.published for talk_id=%s: %s", talk_id, exc)
+        logger.exception(
+            "Failed processing talk.published for talk_id=%s, event_id=%s: %s",
+            talk_id,
+            event_id,
+            exc,
+        )
         return {
             "status": "error",
             "message": str(exc),
