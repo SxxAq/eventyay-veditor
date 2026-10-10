@@ -33,17 +33,36 @@ class VEditorClient:
     @classmethod
     def resolve_base_url(cls, event: Any | None = None) -> str | None:
         """Resolve the configured VEditor base URL for an event or global settings."""
+
+        def _pick_nonempty(*candidates: Any) -> str | None:
+            for c in candidates:
+                if c is not None and str(c).strip():
+                    return str(c).strip().rstrip("/")
+            return None
+
         if event is not None and hasattr(event, "settings"):
-            val = event.settings.get("veditor_api_base_url") or event.settings.get("veditor_base_url")
-            if val and str(val).strip():
-                return str(val).strip().rstrip("/")
+            res = _pick_nonempty(
+                event.settings.get("veditor_api_base_url"),
+                event.settings.get("veditor_base_url"),
+            )
+            if res:
+                return res
+
         if getattr(settings, "configured", False):
-            val = getattr(settings, "VEDITOR_API_BASE_URL", None) or getattr(settings, "VEDITOR_BASE_URL", None)
-            if val and str(val).strip():
-                return str(val).strip().rstrip("/")
-        env_val = os.environ.get("VEDITOR_API_BASE_URL") or os.environ.get("VEDITOR_BASE_URL")
-        if env_val and env_val.strip():
-            return env_val.strip().rstrip("/")
+            res = _pick_nonempty(
+                getattr(settings, "VEDITOR_API_BASE_URL", None),
+                getattr(settings, "VEDITOR_BASE_URL", None),
+            )
+            if res:
+                return res
+
+        res = _pick_nonempty(
+            os.environ.get("VEDITOR_API_BASE_URL"),
+            os.environ.get("VEDITOR_BASE_URL"),
+        )
+        if res:
+            return res
+
         return None
 
     def __init__(
