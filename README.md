@@ -96,11 +96,11 @@ Platform administrators can configure global fallback defaults in Eventyay's env
 
 | Setting / Variable | Default | Description |
 | :--- | :--- | :--- |
-| `VEDITOR_API_BASE_URL` | `http://localhost:8000` | Fallback VEditor backend URL when not overridden per event. |
-| `VEDITOR_API_KEY` | `None` | Default API key for instances sharing a single VEditor client. |
+| `VEDITOR_API_BASE_URL` | `None` | Base URL of the VEditor backend. Must start with `https://`, or `http://` for local loopback (`localhost`, `127.0.0.1`). |
+| `VEDITOR_API_KEY` | `None` | Fallback API key for instances sharing a single VEditor client. |
 | `VEDITOR_WEBHOOK_SECRET` | `None` | Shared secret used to verify incoming webhook signatures. |
 | `VEDITOR_REQUEST_TIMEOUT` | `10` | Timeout in seconds for VEditor API HTTP requests. |
-| `VEDITOR_ALLOWED_ORIGINS` | `localhost, 127.0.0.1` | Comma-separated list of allowed host origins for redirects. |
+| `VEDITOR_ALLOWED_ORIGINS` | `localhost, 127.0.0.1` | Comma-separated list of allowed host origins for redirects and custom URLs. |
 
 ---
 
@@ -128,15 +128,19 @@ cd veditor
 uv sync
 uv run alembic upgrade head
 
-# Create an API client for your test event
-uv run python -m app.cli admin create-client --event-name "Local Test Event"
+# Create an API client for your test event and configure the outbound webhook destination
+uv run python -m app.cli admin create-client \
+  --event-name "Local Test Event" \
+  --webhook-url "http://localhost:8080/api/v1/veditor/webhook/" \
+  --webhook-secret "local_dev_webhook_secret_key"
 ```
 
-The `create-client` command will print the generated API Key and Webhook Secret:
+The `create-client` command will print the generated API Key and Webhook configuration:
 ```text
 Created Client with ID 1
 API Key: v_live_...
-Webhook Secret: ...
+Webhook URL: http://localhost:8080/api/v1/veditor/webhook/
+Webhook Secret: local_dev_webhook_secret_key
 ```
 
 Start the VEditor server:
@@ -162,6 +166,11 @@ uv pip install -e /path/to/eventyay-veditor
 
 # Run migrations
 python manage.py migrate
+
+# Add VEditor configuration to Eventyay's environment (e.g. in Eventyay's .env or current shell)
+# so both the web server and Celery worker load them:
+export VEDITOR_API_BASE_URL="http://localhost:8000"
+export VEDITOR_WEBHOOK_SECRET="local_dev_webhook_secret_key"
 ```
 
 ### 4. Start Eventyay and Celery Worker
@@ -171,7 +180,7 @@ Start the Eventyay development server:
 python manage.py runserver 0.0.0.0:8080
 ```
 
-In a separate terminal, start Celery to process background webhook tasks:
+In a separate terminal, start Celery to process background webhook tasks (ensuring the same environment variables are active):
 ```bash
 celery -A pretix.celery_app worker -l info
 ```
@@ -204,12 +213,11 @@ https://<your-eventyay-domain>/api/v1/veditor/webhook/
 | `talk.approved` | Inbound | Cut approved. Dispatches speaker magic links via background email. |
 | `talk.published` | Inbound | Video finalized. Attaches recording URL to submission and adds public schedule resource. |
 
-### Signature Verification
+### Signature Verification & Replay Protection
 
-VEditor signs requests with an HMAC-SHA256 signature in the `X-Veditor-Signature` header:
-- **Timestamped**: `t=<timestamp>,v1=<hex_digest>` (rejects requests with timestamp drift exceeding 300 seconds).
-- **Prefixed**: `sha256=<hex_digest>`
-- **Raw**: `<hex_digest>`
+VEditor signs requests with an HMAC-SHA256 signature in the `X-Veditor-Signature` header. For replay attack protection, incoming requests require a timestamp within a 300-second tolerance window:
+- **Timestamped header format (Standard)**: `t=<timestamp>,v1=<hex_digest>`
+- **Digest format with payload timestamp**: `sha256=<hex_digest>` or raw `<hex_digest>`, with the timestamp supplied via the JSON payload's `"timestamp"` field.
 
 ---
 
