@@ -792,7 +792,7 @@ def test_attach_room_recording_with_video_url():
     result = client.attach_room_recording(
         room="Main Hall",
         event_id=42,
-        video_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        video_url="https://example.com/recordings/room1.mp4",
         recording_start=datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC),
     )
 
@@ -806,7 +806,7 @@ def test_attach_room_recording_with_video_url():
     req_body = json.loads(responses.calls[0].request.body)
     assert req_body["room"] == "Main Hall"
     assert req_body["event_id"] == 42
-    assert req_body["video_url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert req_body["video_url"] == "https://example.com/recordings/room1.mp4"
     assert req_body["recording_start"] == "2026-09-25T09:00:00+00:00"
 
 
@@ -865,7 +865,7 @@ def test_attach_room_recording_validation_errors():
 
     # Missing room
     with pytest.raises(ValueError, match="Room name is required"):
-        client.attach_room_recording(room="", video_url="https://youtube.com/watch?v=123")
+        client.attach_room_recording(room="", video_url="https://example.com/stream.mp4")
 
     # Missing all media sources
     with pytest.raises(ValueError, match="Either video_url, video_file, relative_key, or source_path must be provided"):
@@ -879,7 +879,7 @@ def test_attach_room_recording_validation_errors():
     with pytest.raises(ValueError, match="Conflicting recording sources provided"):
         client.attach_room_recording(
             room="Main Hall",
-            video_url="https://youtube.com/watch?v=123",
+            video_url="https://example.com/stream.mp4",
             source_path="/media/file.mp4",
         )
 
@@ -904,7 +904,7 @@ def test_attach_room_recording_omitted_event_id_auto_resolves():
     result = client.attach_room_recording(
         room="Room A",
         event_id=None,
-        video_url="https://youtube.com/watch?v=abc",
+        video_url="https://example.com/recordings/room_a.mp4",
     )
 
     assert result["status"] == "ok"

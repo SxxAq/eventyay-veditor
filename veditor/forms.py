@@ -79,15 +79,15 @@ class RoomRecordingAttachmentForm(forms.Form):
         help_text=_("Select the authoritative event room where this recording took place."),
     )
     video_url = forms.URLField(
-        label=_("Video / Livestream URL"),
+        label=_("Recording Video URL"),
         required=False,
         widget=forms.URLInput(
             attrs={
                 "class": "form-control",
-                "placeholder": "https://www.youtube.com/watch?v=... or https://vimeo.com/...",
+                "placeholder": "https://example.com/recording.mp4 or cloud storage link",
             }
         ),
-        help_text=_("Public or unlisted livestream/video link (YouTube, Vimeo, or direct video stream URL)."),
+        help_text=_("Direct video URL, Google Drive, Dropbox, or public media stream link."),
     )
     video_file = forms.FileField(
         label=_("Upload Video File"),
@@ -137,7 +137,7 @@ class RoomRecordingAttachmentForm(forms.Form):
         recording_start = (cleaned_data.get("recording_start") or "").strip()
 
         if not video_url and not video_file:
-            raise forms.ValidationError(_("You must specify either a Video / Livestream URL or upload a Video File."))
+            raise forms.ValidationError(_("You must specify either a Recording Video URL or upload a Video File."))
 
         if video_url and video_file:
             raise forms.ValidationError(_("Please specify either a Video URL or upload a File, not both."))

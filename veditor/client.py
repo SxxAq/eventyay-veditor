@@ -404,7 +404,7 @@ class VEditorClient:
         Args:
             room: Name of the room as configured in the schedule.
             event_id: Target event ID in VEditor. If None, auto-resolved via get_scoped_event_id().
-            video_url: External video / livestream URL (YouTube, Vimeo, or HTTP stream).
+            video_url: Direct video URL or cloud storage link (Dropbox, Google Drive, Nextcloud, direct HTTP/HTTPS stream).
             video_file: File-like object or tuple suitable for requests multipart upload.
             relative_key: Optional path to recording file relative to VEditor's ingest roots.
             source_path: Optional shared storage path to recording file accessible by VEditor.

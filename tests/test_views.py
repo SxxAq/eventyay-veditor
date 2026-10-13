@@ -582,7 +582,7 @@ def test_connect_view_post_attach_room_recording_success(event, organizer_user, 
             data={
                 "action": "attach_room_recording",
                 "room": "Main Hall",
-                "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                "video_url": "https://example.com/recordings/room1.mp4",
                 "recording_start": "2026-09-25T09:00:00Z",
             },
         )
@@ -614,7 +614,7 @@ def test_connect_view_post_attach_room_recording_success(event, organizer_user, 
         mock_client.attach_room_recording.assert_called_once_with(
             room="Main Hall",
             event_id=distinct_veditor_event_id,
-            video_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            video_url="https://example.com/recordings/room1.mp4",
             video_file=None,
             recording_start="2026-09-25T09:00:00Z",
         )
@@ -635,7 +635,7 @@ def test_connect_view_post_attach_room_recording_sync_failure_stops_attachment(e
             data={
                 "action": "attach_room_recording",
                 "room": "Main Hall",
-                "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                "video_url": "https://example.com/recordings/room1.mp4",
             },
         )
     )
@@ -670,7 +670,7 @@ def test_connect_view_post_attach_room_recording_unexpected_sync_failure_propaga
             data={
                 "action": "attach_room_recording",
                 "room": "Main Hall",
-                "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                "video_url": "https://example.com/recordings/room1.mp4",
             },
         )
     )
@@ -773,7 +773,7 @@ def test_connect_view_post_attach_room_recording_api_error(event, organizer_user
             data={
                 "action": "attach_room_recording",
                 "room": "Main Hall",
-                "video_url": "https://vimeo.com/invalid",
+                "video_url": "https://example.com/recordings/invalid.mp4",
             },
         )
     )
