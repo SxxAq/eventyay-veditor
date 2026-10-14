@@ -344,6 +344,7 @@ class VEditorClient:
         role: str = "organizer",
         email: str | None = None,
         display_name: str | None = None,
+        expires_in_seconds: int | None = None,
     ) -> str:
         """Request a scoped SSO JWT token for browser handoff, reviewer QA, or speaker review."""
         normalized_role = "organizer" if role in ("organiser", "organizer") else role
@@ -362,6 +363,8 @@ class VEditorClient:
             payload["email"] = email
         if display_name:
             payload["display_name"] = display_name
+        if expires_in_seconds is not None:
+            payload["expires_in_seconds"] = int(expires_in_seconds)
 
         response_data = self._request("POST", endpoint, json=payload)
 
