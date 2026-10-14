@@ -26,20 +26,44 @@ class VEditorSettingsForm(forms.Form):
         widget=forms.URLInput(attrs={"class": "form-control", "placeholder": "http://localhost:8080"}),
         help_text=_("Optional: Custom VEditor service URL. If blank, the system default URL is used."),
     )
+    veditor_webhook_secret = forms.CharField(
+        label=_("VEditor Webhook Secret"),
+        required=False,
+        widget=forms.PasswordInput(
+            render_value=False,
+            attrs={"class": "form-control", "placeholder": "••••••••"},
+        ),
+        help_text=_("Optional: The shared secret for authenticating inbound webhook signals from VEditor."),
+    )
 
-    def __init__(self, *args: Any, has_existing_key: bool = False, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        has_existing_key: bool = False,
+        has_existing_secret: bool = False,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.has_existing_key = has_existing_key
+        self.has_existing_secret = has_existing_secret
         if has_existing_key:
             self.fields["veditor_api_key"].help_text = _("Leave blank to keep the currently configured API key, or enter a new key to update.")
         else:
             self.fields["veditor_api_key"].widget.attrs["placeholder"] = _("API key generated in VEditor")
+
+        if has_existing_secret:
+            self.fields["veditor_webhook_secret"].help_text = _("Leave blank to keep the currently configured webhook secret, or enter a new secret to update.")
+        else:
+            self.fields["veditor_webhook_secret"].widget.attrs["placeholder"] = _("Shared webhook secret configured in VEditor")
 
     def clean_veditor_api_key(self) -> str:
         key = (self.cleaned_data.get("veditor_api_key") or "").strip()
         if not key and not self.has_existing_key:
             raise forms.ValidationError(_("This field is required."))
         return key
+
+    def clean_veditor_webhook_secret(self) -> str:
+        return (self.cleaned_data.get("veditor_webhook_secret") or "").strip()
 
     def clean_veditor_api_base_url(self) -> str:
         """Validate base URL scheme and optional origin allowlist if provided."""
@@ -62,8 +86,16 @@ class VEditorSettingsForm(forms.Form):
 
         allowed = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", None)
         if allowed:
-            origin = f"{parsed.scheme}://{parsed.netloc}"
-            if origin not in allowed and parsed.netloc not in allowed and hostname not in allowed:
+            # Keep this normalization aligned with VEditorClient._validate_config.
+            allowed_set: set[str] = set()
+            if isinstance(allowed, str):
+                allowed_set = {o.strip().lower() for o in allowed.split(",") if o.strip()}
+            elif isinstance(allowed, (list, tuple, set)):
+                allowed_set = {str(o).strip().lower() for o in allowed if str(o).strip()}
+
+            origin = f"{parsed.scheme}://{parsed.netloc}".lower()
+            netloc = (parsed.netloc or "").lower()
+            if origin not in allowed_set and netloc not in allowed_set and hostname not in allowed_set:
                 raise forms.ValidationError(_("The VEditor URL origin is not in the allowed list."))
 
         return url.rstrip("/")
