@@ -204,7 +204,7 @@ def test_process_talk_approved_success_single_speaker(configured_event, submissi
         role="speaker",
         email=speaker_user.email,
         display_name=speaker_user.fullname,
-        expires_in_seconds=None,
+        expires_in_seconds=7 * 86400,
     )
 
     # Inspect dispatched email via QueuedMail

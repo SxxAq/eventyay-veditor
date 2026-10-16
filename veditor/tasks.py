@@ -234,14 +234,15 @@ def process_talk_approved(
             display_name = display_name or speaker_email
 
             review_days = event_obj.settings.get("speaker_review_window_days") if hasattr(event_obj, "settings") else None
-            expires_in_seconds = None
+            review_days_int = 7
             if review_days is not None:
                 try:
-                    review_days_int = int(review_days)
-                    if review_days_int > 0:
-                        expires_in_seconds = review_days_int * 86400
+                    parsed_days = int(review_days)
+                    if parsed_days > 0:
+                        review_days_int = parsed_days
                 except (ValueError, TypeError):
                     pass
+            expires_in_seconds = review_days_int * 86400
 
             try:
                 token = client.request_sso_jwt(

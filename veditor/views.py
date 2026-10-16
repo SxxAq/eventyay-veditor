@@ -202,11 +202,12 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     if new_secret:
                         event.settings.set("veditor_webhook_secret", new_secret)
 
-                    review_window = form.cleaned_data.get("speaker_review_window_days")
-                    if review_window is not None:
-                        event.settings.set("speaker_review_window_days", int(review_window))
-                    elif "speaker_review_window_days" in form.cleaned_data:
-                        event.settings.set("speaker_review_window_days", 7)
+                    if "speaker_review_window_days" in request.POST:
+                        review_window = form.cleaned_data.get("speaker_review_window_days")
+                        if review_window is not None:
+                            event.settings.set("speaker_review_window_days", int(review_window))
+                        else:
+                            event.settings.set("speaker_review_window_days", 7)
 
                 messages.success(request, _("VEditor connection settings saved successfully."))
                 return redirect(
