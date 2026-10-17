@@ -941,6 +941,14 @@ def test_speaker_review_launch_by_organizer_user(event, confirmed_submission, or
 
         assert response.status_code == 302
         assert "sso_token=admin_speaker_sso_token" in response.url
+        mock_client.request_sso_jwt.assert_called_once_with(
+            event_id="42",
+            talk_id=str(confirmed_submission.code),
+            role="speaker",
+            email=organizer_user.email,
+            display_name=organizer_user.fullname,
+            return_response_data=True,
+        )
 
 
 def test_speaker_review_veditor_config_error(event, confirmed_submission, speaker_user, rf):

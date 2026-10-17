@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from django.conf import settings
 from django.contrib import messages
@@ -466,10 +466,25 @@ class SpeakerReviewLaunchView(LoginRequiredMixin, View):
             else:
                 token, sso_data = str(sso_res), {}
         except (VEditorError, ValueError) as exc:
-            # If talk not found in VEditor, try auto-syncing talk and retry token request once
+            # Only attempt talk-sync retry if talk was not found (HTTP 404)
+            is_404 = getattr(exc, "status_code", None) == 404 or (getattr(getattr(exc, "response", None), "status_code", None) == 404)
+            if not is_404:
+                logger.warning(
+                    "Failed to request speaker SSO JWT for submission %s: %s",
+                    submission_code,
+                    exc,
+                )
+                messages.error(
+                    request,
+                    _("Failed to launch video review. Please try again later or contact support."),
+                )
+                return HttpResponseRedirect(self.get_fallback_url(request, event_obj))
+
             try:
                 target_slot = getattr(submission, "slots", None)
-                slot_obj = target_slot.first() if target_slot and hasattr(target_slot, "first") else submission
+                slot_obj = target_slot.first() if target_slot and hasattr(target_slot, "first") else None
+                if slot_obj is None:
+                    slot_obj = submission
                 client.sync_talk(slot_obj, event_id=target_event_id)
                 sso_res = client.request_sso_jwt(
                     event_id=target_event_id,
@@ -485,20 +500,38 @@ class SpeakerReviewLaunchView(LoginRequiredMixin, View):
                     token, sso_data = str(sso_res), {}
             except Exception as retry_exc:
                 logger.exception(
-                    "Failed to establish speaker SSO session for submission %s: %s",
+                    "Failed to establish speaker SSO session for submission %s (initial error: %s, retry error: %s)",
                     submission_code,
+                    exc,
                     retry_exc,
                 )
                 messages.error(
                     request,
-                    _("Failed to launch video review: {error}").format(error=str(exc)),
+                    _("Failed to launch video review. Please try again later or contact support."),
                 )
                 return HttpResponseRedirect(self.get_fallback_url(request, event_obj))
 
         redirect_path = sso_data.get("url") if isinstance(sso_data, dict) else None
         if redirect_path:
-            if redirect_path.startswith("http://") or redirect_path.startswith("https://"):
-                redirect_url = redirect_path
+            parsed_redirect = urlparse(redirect_path)
+            if parsed_redirect.scheme in ("http", "https"):
+                parsed_base = urlparse(client.base_url)
+                allowed_netlocs = {parsed_base.netloc}
+                extra_origins = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", [])
+                for origin in extra_origins:
+                    netloc = urlparse(origin).netloc
+                    if netloc:
+                        allowed_netlocs.add(netloc)
+
+                if parsed_redirect.netloc in allowed_netlocs:
+                    redirect_url = redirect_path
+                else:
+                    logger.warning(
+                        "SSO redirect URL %s is not in allowed origins, falling back to client.base_url",
+                        redirect_path,
+                    )
+                    query = urlencode({"sso_token": token})
+                    redirect_url = f"{client.base_url}/studio/talks/{submission_code}?{query}"
             else:
                 redirect_url = f"{client.base_url}/{redirect_path.lstrip('/')}"
         else:
