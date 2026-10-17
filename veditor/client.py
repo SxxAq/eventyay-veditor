@@ -344,6 +344,7 @@ class VEditorClient:
         role: str = "organizer",
         email: str | None = None,
         display_name: str | None = None,
+        expires_in_seconds: int | None = None,
         return_response_data: bool = False,
     ) -> str | tuple[str, dict[str, Any]]:
         """Request a scoped SSO JWT token for browser handoff, reviewer QA, or speaker review."""
@@ -363,6 +364,8 @@ class VEditorClient:
             payload["email"] = email
         if display_name:
             payload["display_name"] = display_name
+        if expires_in_seconds is not None:
+            payload["expires_in_seconds"] = int(expires_in_seconds)
 
         response_data = self._request("POST", endpoint, json=payload)
 

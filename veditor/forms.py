@@ -35,6 +35,22 @@ class VEditorSettingsForm(forms.Form):
         ),
         help_text=_("Optional: The shared secret for authenticating inbound webhook signals from VEditor."),
     )
+    speaker_review_window_days = forms.IntegerField(
+        label=_("Speaker Review Window (Days)"),
+        required=False,
+        min_value=1,
+        max_value=90,
+        initial=7,
+        widget=forms.NumberInput(
+            attrs={
+                "class": "form-control",
+                "min": "1",
+                "max": "90",
+                "placeholder": "7",
+            }
+        ),
+        help_text=_("Optional: Number of days (1–90) speaker review magic links remain valid before expiring. Defaults to 7 days."),
+    )
 
     def __init__(
         self,
@@ -64,6 +80,12 @@ class VEditorSettingsForm(forms.Form):
 
     def clean_veditor_webhook_secret(self) -> str:
         return (self.cleaned_data.get("veditor_webhook_secret") or "").strip()
+
+    def clean_speaker_review_window_days(self) -> int | None:
+        val = self.cleaned_data.get("speaker_review_window_days")
+        if val is None:
+            return None
+        return int(val)
 
     def clean_veditor_api_base_url(self) -> str:
         """Validate base URL scheme and optional origin allowlist if provided."""

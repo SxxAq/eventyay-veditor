@@ -100,15 +100,26 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         )
         has_global_secret = bool(global_secret)
         has_saved_secret = bool(has_event_secret or has_global_secret)
+        saved_review_days = event.settings.get("speaker_review_window_days") if hasattr(event, "settings") else None
+        if saved_review_days is None:
+            saved_review_days = 7
+        else:
+            try:
+                saved_review_days = int(saved_review_days)
+            except (ValueError, TypeError):
+                saved_review_days = 7
 
         if "form" not in context:
             context["form"] = VEditorSettingsForm(
                 initial={
                     "veditor_api_base_url": saved_url,
+                    "speaker_review_window_days": saved_review_days,
                 },
                 has_existing_key=has_saved_key,
                 has_existing_secret=has_event_secret,
             )
+
+        context["speaker_review_window_days"] = saved_review_days
 
         try:
             client = VEditorClient(event=event)
@@ -200,6 +211,13 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     new_secret = (form.cleaned_data.get("veditor_webhook_secret") or "").strip()
                     if new_secret:
                         event.settings.set("veditor_webhook_secret", new_secret)
+
+                    if "speaker_review_window_days" in request.POST:
+                        review_window = form.cleaned_data.get("speaker_review_window_days")
+                        if review_window is not None:
+                            event.settings.set("speaker_review_window_days", int(review_window))
+                        else:
+                            event.settings.set("speaker_review_window_days", 7)
 
                 messages.success(request, _("VEditor connection settings saved successfully."))
                 return redirect(
@@ -516,19 +534,26 @@ class SpeakerReviewLaunchView(LoginRequiredMixin, View):
             parsed_redirect = urlparse(redirect_path)
             if parsed_redirect.scheme in ("http", "https"):
                 parsed_base = urlparse(client.base_url)
-                allowed_netlocs = {parsed_base.netloc}
-                extra_origins = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", [])
-                for origin in extra_origins:
-                    netloc = urlparse(origin).netloc
-                    if netloc:
-                        allowed_netlocs.add(netloc)
+                allowed_netlocs = {parsed_base.netloc.lower()}
+                raw_extra = getattr(settings, "VEDITOR_ALLOWED_ORIGINS", [])
+                if isinstance(raw_extra, str):
+                    extra_origins = [o.strip() for o in raw_extra.split(",") if o.strip()]
+                elif isinstance(raw_extra, (list, tuple, set)):
+                    extra_origins = list(raw_extra)
+                else:
+                    extra_origins = []
 
-                if parsed_redirect.netloc in allowed_netlocs:
+                for origin in extra_origins:
+                    netloc = urlparse(origin).netloc or str(origin).strip()
+                    if netloc:
+                        allowed_netlocs.add(netloc.lower())
+
+                if (parsed_redirect.netloc or "").lower() in allowed_netlocs:
                     redirect_url = redirect_path
                 else:
                     logger.warning(
-                        "SSO redirect URL %s is not in allowed origins, falling back to client.base_url",
-                        redirect_path,
+                        "SSO redirect host '%s' is not in allowed origins, falling back to client.base_url",
+                        parsed_redirect.netloc,
                     )
                     query = urlencode({"sso_token": token})
                     redirect_url = f"{client.base_url}/studio/talks/{submission_code}?{query}"

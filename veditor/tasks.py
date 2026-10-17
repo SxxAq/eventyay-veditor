@@ -233,6 +233,17 @@ def process_talk_approved(
                 display_name = speaker.get_display_name()
             display_name = display_name or speaker_email
 
+            review_days = event_obj.settings.get("speaker_review_window_days") if hasattr(event_obj, "settings") else None
+            review_days_int = 7
+            if review_days is not None:
+                try:
+                    parsed_days = int(review_days)
+                    if parsed_days > 0:
+                        review_days_int = parsed_days
+                except (ValueError, TypeError):
+                    pass
+            expires_in_seconds = review_days_int * 86400
+
             try:
                 token = client.request_sso_jwt(
                     event_id=target_event_id,
@@ -240,6 +251,7 @@ def process_talk_approved(
                     role="speaker",
                     email=speaker_email,
                     display_name=display_name,
+                    expires_in_seconds=expires_in_seconds,
                 )
             except VEditorNetworkError:
                 logger.warning(
