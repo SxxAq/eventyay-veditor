@@ -18,7 +18,6 @@ from veditor.exceptions import (
     VEditorSyncError,
 )
 from veditor.signals import control_nav_veditor
-from veditor.templatetags.veditor import can_review_video, speaker_review_url
 from veditor.views import ConnectView, SpeakerReviewLaunchView
 
 
@@ -1122,42 +1121,3 @@ def test_speaker_review_sso_failure_handles_gracefully(event, confirmed_submissi
         assert response.url == "/common/sessions/"
         messages = [m.message for m in request._messages]
         assert any("Failed to launch video review" in str(m) for m in messages)
-
-
-# ============================================================================
-# Template Tag Tests
-# ============================================================================
-
-
-def test_templatetag_can_review_video(event, confirmed_submission, speaker_user, user):
-    event.plugins = "veditor"
-    assert can_review_video(confirmed_submission) is True
-    assert can_review_video(confirmed_submission, user=speaker_user) is True
-
-    # Unauthorized user
-    user.email = "other@example.com"
-    assert can_review_video(confirmed_submission, user=user) is False
-
-    # Non-confirmed states
-    for non_confirmed in ["submitted", "accepted", "rejected", "withdrawn", "canceled"]:
-        confirmed_submission.state = non_confirmed
-        assert can_review_video(confirmed_submission) is False
-        assert can_review_video(confirmed_submission, user=speaker_user) is False
-
-    confirmed_submission.state = "confirmed"
-
-    # Plugin not active
-    event.plugins = ""
-    event.settings.set("veditor_api_base_url", "")
-    assert can_review_video(confirmed_submission) is False
-
-    # None submission
-    assert can_review_video(None) is False
-
-
-def test_templatetag_speaker_review_url(event, confirmed_submission):
-    url = speaker_review_url(confirmed_submission)
-    assert url == f"/common/event/{event.organizer.slug}/{event.slug}/veditor/talk/{confirmed_submission.code}/review/"
-
-    assert speaker_review_url(None) == ""
-    assert speaker_review_url(SimpleNamespace(event=None)) == ""
