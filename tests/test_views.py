@@ -161,6 +161,22 @@ def test_connect_view_get_authorized(event, organizer_user, rf):
     assert response.status_code == 200
     assert response.context_data["event"] == event
     assert response.context_data["talks_count"] == 0
+    assert response.context_data["speaker_review_window_days"] == 7
+
+
+def test_connect_view_get_with_saved_review_window(event, organizer_user, rf):
+    event.settings.set("speaker_review_window_days", 21)
+    request = setup_request(rf.get(reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug})))
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    view = ConnectView.as_view()
+    response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+    assert response.status_code == 200
+    assert response.context_data["speaker_review_window_days"] == 21
+    assert response.context_data["form"]["speaker_review_window_days"].value() == 21
 
 
 def test_connect_view_post_success(event, organizer_user, rf):
@@ -250,6 +266,53 @@ def test_connect_view_post_save_settings(event, organizer_user, rf):
     assert event.settings.get("veditor_api_key") == "new-secret-key"
 
 
+def test_connect_view_post_save_settings_speaker_review_window(event, organizer_user, rf):
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "save_settings",
+                "veditor_api_base_url": "http://localhost:8080/",
+                "veditor_api_key": "new-secret-key",
+                "speaker_review_window_days": "14",
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    view = ConnectView.as_view()
+    response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+    assert response.status_code == 302
+    assert event.settings.get("speaker_review_window_days") == 14
+
+
+def test_connect_view_post_save_settings_speaker_review_window_invalid(event, organizer_user, rf):
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "save_settings",
+                "veditor_api_base_url": "http://localhost:8080/",
+                "veditor_api_key": "new-secret-key",
+                "speaker_review_window_days": "120",  # exceeds max_value 90
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    view = ConnectView.as_view()
+    response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+    assert response.status_code == 200
+    form = response.context_data["form"]
+    assert "speaker_review_window_days" in form.errors
+
+
 def test_connect_view_post_save_settings_api_key_only(event, organizer_user, rf):
     request = setup_request(
         rf.post(
@@ -270,6 +333,29 @@ def test_connect_view_post_save_settings_api_key_only(event, organizer_user, rf)
 
     assert response.status_code == 302
     assert event.settings.get("veditor_api_key") == "key-without-explicit-url"
+
+
+def test_connect_view_post_save_settings_preserves_custom_review_window_when_omitted(event, organizer_user, rf):
+    event.settings.set("speaker_review_window_days", 21)
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={
+                "action": "save_settings",
+                "veditor_api_base_url": "http://localhost:8080",
+                "veditor_api_key": "some-key",
+            },
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    view = ConnectView.as_view()
+    response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+    assert response.status_code == 302
+    assert event.settings.get("speaker_review_window_days") == 21
 
 
 def test_connect_view_post_save_settings_with_webhook_secret(event, organizer_user, rf):

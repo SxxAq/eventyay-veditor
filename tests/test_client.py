@@ -572,6 +572,32 @@ def test_request_sso_jwt_speaker():
     assert token == "dummy_speaker_jwt"
 
 
+@responses.activate
+def test_request_sso_jwt_speaker_with_expires_in_seconds():
+    import json
+
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+
+    responses.add(
+        responses.POST,
+        "https://veditor.test/talks/talk-123/sso-token",
+        json={"token": "dummy_speaker_jwt_custom_expiry"},
+        status=200,
+    )
+
+    token = client.request_sso_jwt(
+        event_id="fossasia-2026",
+        talk_id="talk-123",
+        role="speaker",
+        expires_in_seconds=604800,
+    )
+    assert token == "dummy_speaker_jwt_custom_expiry"
+    assert len(responses.calls) == 1
+    sent_payload = json.loads(responses.calls[0].request.body)
+    assert sent_payload["expires_in_seconds"] == 604800
+    assert sent_payload["role"] == "speaker"
+
+
 def test_request_sso_jwt_speaker_missing_talk_id():
     client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
     with pytest.raises(ValueError, match="talk_id is required"):

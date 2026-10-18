@@ -204,14 +204,38 @@ def test_process_talk_approved_success_single_speaker(configured_event, submissi
         role="speaker",
         email=speaker_user.email,
         display_name=speaker_user.fullname,
+        expires_in_seconds=7 * 86400,
     )
 
     # Inspect dispatched email via QueuedMail
     assert len(mock_tasks_orm["queued_mails"]) == 1
+
+
+def test_process_talk_approved_custom_review_window_days(configured_event, submission, speaker_user, mock_tasks_orm):
+    """Verify custom speaker_review_window_days is converted to expires_in_seconds for SSO JWT."""
+    configured_event.settings.set("speaker_review_window_days", 14)
+    with patch("veditor.tasks.VEditorClient.request_sso_jwt") as mock_jwt:
+        mock_jwt.return_value = "jwt.test.token.custom_window"
+
+        result = process_talk_approved(
+            event_id=configured_event.id,
+            talk_id="42",
+            external_id=submission.code,
+        )
+
+    assert result["status"] == "success"
+    mock_jwt.assert_called_once_with(
+        event_id=str(configured_event.id),
+        talk_id="42",
+        role="speaker",
+        email=speaker_user.email,
+        display_name=speaker_user.fullname,
+        expires_in_seconds=14 * 86400,
+    )
     sent_mail = mock_tasks_orm["queued_mails"][0]
     assert sent_mail.to == speaker_user.email
     assert f"[{configured_event.name}] Video Review Ready: {submission.title}" in sent_mail.subject
-    assert "jwt.test.token.speaker123" in sent_mail.text
+    assert "jwt.test.token.custom_window" in sent_mail.text
     sent_mail.to_users.add.assert_called_once_with(speaker_user)
     sent_mail.submissions.add.assert_called_once_with(submission)
     sent_mail.send.assert_called_once()

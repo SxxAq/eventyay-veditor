@@ -90,15 +90,26 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         )
         has_global_secret = bool(global_secret)
         has_saved_secret = bool(has_event_secret or has_global_secret)
+        saved_review_days = event.settings.get("speaker_review_window_days") if hasattr(event, "settings") else None
+        if saved_review_days is None:
+            saved_review_days = 7
+        else:
+            try:
+                saved_review_days = int(saved_review_days)
+            except (ValueError, TypeError):
+                saved_review_days = 7
 
         if "form" not in context:
             context["form"] = VEditorSettingsForm(
                 initial={
                     "veditor_api_base_url": saved_url,
+                    "speaker_review_window_days": saved_review_days,
                 },
                 has_existing_key=has_saved_key,
                 has_existing_secret=has_event_secret,
             )
+
+        context["speaker_review_window_days"] = saved_review_days
 
         if "room_form" not in context:
             context["room_form"] = RoomRecordingAttachmentForm(event=event)
@@ -117,7 +128,6 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                 rooms_list = list(event.rooms.all().order_by("name"))
         context["rooms"] = rooms_list
         context["rooms_count"] = len(rooms_list)
-
         try:
             client = VEditorClient(event=event)
             context["veditor_configured"] = bool(client.api_key)
@@ -208,6 +218,13 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     new_secret = (form.cleaned_data.get("veditor_webhook_secret") or "").strip()
                     if new_secret:
                         event.settings.set("veditor_webhook_secret", new_secret)
+
+                    if "speaker_review_window_days" in request.POST:
+                        review_window = form.cleaned_data.get("speaker_review_window_days")
+                        if review_window is not None:
+                            event.settings.set("speaker_review_window_days", int(review_window))
+                        else:
+                            event.settings.set("speaker_review_window_days", 7)
 
                 messages.success(request, _("VEditor connection settings saved successfully."))
                 return redirect(

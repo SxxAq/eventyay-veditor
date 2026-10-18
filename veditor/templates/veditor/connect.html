@@ -77,6 +77,16 @@
                             <span class="help-block text-danger">{{ error }}</span>
                         {% endfor %}
                     </div>
+                    <div class="form-group {% if form.speaker_review_window_days.errors %}has-error{% endif %}">
+                        <label for="{{ form.speaker_review_window_days.id_for_label }}">{{ form.speaker_review_window_days.label }}</label>
+                        {{ form.speaker_review_window_days }}
+                        {% if form.speaker_review_window_days.help_text %}
+                            <span class="help-block">{{ form.speaker_review_window_days.help_text }}</span>
+                        {% endif %}
+                        {% for error in form.speaker_review_window_days.errors %}
+                            <span class="help-block text-danger">{{ error }}</span>
+                        {% endfor %}
+                    </div>
                     <button type="submit" class="btn btn-primary" id="btn-save-settings">
                         <i class="fa fa-check"></i> {% trans "Connect VEditor" %}
                     </button>
@@ -166,6 +176,16 @@
                                     <span class="help-block text-danger">{{ error }}</span>
                                 {% endfor %}
                             </div>
+                            <div class="form-group {% if form.speaker_review_window_days.errors %}has-error{% endif %}">
+                                <label for="{{ form.speaker_review_window_days.id_for_label }}">{{ form.speaker_review_window_days.label }}</label>
+                                {{ form.speaker_review_window_days }}
+                                {% if form.speaker_review_window_days.help_text %}
+                                    <span class="help-block">{{ form.speaker_review_window_days.help_text }}</span>
+                                {% endif %}
+                                {% for error in form.speaker_review_window_days.errors %}
+                                    <span class="help-block text-danger">{{ error }}</span>
+                                {% endfor %}
+                            </div>
                             <button type="submit" class="btn btn-primary" id="btn-save-settings">
                                 <i class="fa fa-save"></i> {% trans "Update Settings" %}
                             </button>
@@ -215,6 +235,9 @@
                                 <i class="fa fa-shield"></i> {% trans "No Webhook Secret" %}
                             </span>
                         {% endif %}
+                        <span class="label label-info veditor-label-webhook" title="{% trans 'Speaker review magic link expiration window' %}">
+                            <i class="fa fa-clock-o"></i> {% blocktrans with days=speaker_review_window_days %}{{ days }}d Review Window{% endblocktrans %}
+                        </span>
                     </div>
                     <div class="veditor-schedule-summary">
                         {% if talks_count %}
