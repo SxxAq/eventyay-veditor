@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import html
 import logging
+from contextlib import nullcontext
 from urllib.parse import urlparse
+
+try:
+    from django_scopes import scope
+except ImportError:
+
+    def scope(**kwargs):
+        return nullcontext()
+
 
 try:
     from eventyay.agenda.recording import BaseRecordingProvider
@@ -33,16 +42,27 @@ class VEditorRecordingProvider(BaseRecordingProvider):
 
         if hasattr(submission, "resources"):
             try:
-                resource = (
-                    submission.resources.filter(
-                        description__iexact="Video Recording",
-                    ).first()
-                    or submission.resources.filter(
-                        description__icontains="recording",
-                    ).first()
-                )
-                if resource and resource.link:
-                    video_url = resource.link
+                event = getattr(self, "event", None) or getattr(submission, "event", None)
+                scope_cm = scope(event=event) if event else nullcontext()
+                with scope_cm:
+                    resource = (
+                        submission.resources.filter(
+                            description__iexact="Video Recording",
+                            link__isnull=False,
+                        )
+                        .exclude(link="")
+                        .order_by("id")
+                        .first()
+                        or submission.resources.filter(
+                            description__icontains="recording",
+                            link__isnull=False,
+                        )
+                        .exclude(link="")
+                        .order_by("id")
+                        .first()
+                    )
+                    if resource and resource.link:
+                        video_url = resource.link
             except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "Error looking up resources for submission %s: %s",

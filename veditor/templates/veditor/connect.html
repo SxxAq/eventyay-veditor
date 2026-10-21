@@ -437,7 +437,7 @@
                             </td>
                             <td>
                                 <div class="veditor-status-cell">
-                                    {% if slot.submission.recording_url %}
+                                    {% if slot.submission_id in recorded_submission_ids or slot.submission.recording_url %}
                                         <span class="label label-success">
                                              <i class="fa fa-check"></i> {% trans "Published" %}
                                         </span>

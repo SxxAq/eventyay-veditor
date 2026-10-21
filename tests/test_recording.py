@@ -27,7 +27,11 @@ def test_recording_provider_no_recording_available():
     submission = MagicMock()
     submission.do_not_record = False
     submission.recording_url = None
-    submission.resources.filter.return_value.first.return_value = None
+    mock_qs = MagicMock()
+    mock_qs.exclude.return_value = mock_qs
+    mock_qs.order_by.return_value = mock_qs
+    mock_qs.first.return_value = None
+    submission.resources.filter.return_value = mock_qs
 
     result = provider.get_recording(submission)
     assert result == {}
@@ -85,12 +89,60 @@ def test_recording_provider_from_resource_model():
 
     submission = MagicMock(spec=["do_not_record", "resources"])
     submission.do_not_record = False
-    submission.resources.filter.return_value.first.return_value = resource_mock
+    mock_qs = MagicMock()
+    mock_qs.exclude.return_value = mock_qs
+    mock_qs.order_by.return_value = mock_qs
+    mock_qs.first.return_value = resource_mock
+    submission.resources.filter.return_value = mock_qs
 
     result = provider.get_recording(submission)
     assert "<iframe" in result["iframe"]
     assert 'src="https://archive.org/embed/my-event-talk"' in result["iframe"]
     assert result["csp_header"] == "https://archive.org"
+
+
+def test_recording_provider_skips_empty_resource_and_selects_valid():
+    """Provider skips matching resource with empty link and selects subsequent valid resource."""
+    event = MagicMock()
+    provider = VEditorRecordingProvider(event)
+
+    valid_resource = MagicMock()
+    valid_resource.link = "https://cdn.example.com/videos/talk.mp4"
+
+    submission = MagicMock(spec=["do_not_record", "resources"])
+    submission.do_not_record = False
+
+    mock_qs = MagicMock()
+    mock_qs.exclude.return_value = mock_qs
+    mock_qs.order_by.return_value = mock_qs
+    mock_qs.first.return_value = valid_resource
+    submission.resources.filter.return_value = mock_qs
+
+    result = provider.get_recording(submission)
+    mock_qs.exclude.assert_called_with(link="")
+    assert "iframe" in result
+    assert "<video controls" in result["iframe"]
+    assert 'src="https://cdn.example.com/videos/talk.mp4"' in result["iframe"]
+    assert result["csp_header"] == "https://cdn.example.com"
+
+
+def test_recording_provider_all_resources_empty_link_returns_empty():
+    """Provider returns empty dict when all matching resources have empty or null links."""
+    event = MagicMock()
+    provider = VEditorRecordingProvider(event)
+
+    submission = MagicMock(spec=["do_not_record", "resources", "recording_url"])
+    submission.do_not_record = False
+    submission.recording_url = None
+
+    mock_qs = MagicMock()
+    mock_qs.exclude.return_value = mock_qs
+    mock_qs.order_by.return_value = mock_qs
+    mock_qs.first.return_value = None
+    submission.resources.filter.return_value = mock_qs
+
+    result = provider.get_recording(submission)
+    assert result == {}
 
 
 def test_recording_provider_html_escaping():

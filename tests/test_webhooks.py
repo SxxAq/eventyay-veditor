@@ -1713,6 +1713,8 @@ def test_tasks_process_talk_published_idempotent_public_schedule_updates():
 
     def mock_filter_res(*args, **kwargs):
         mock_qs = MagicMock()
+        mock_qs.exclude.return_value = mock_qs
+        mock_qs.order_by.return_value = mock_qs
         matched = [r for r in existing_resources if r.description.lower() == "video recording"]
         mock_qs.first.side_effect = lambda: matched[0] if matched else None
         mock_qs.order_by.return_value.first.side_effect = lambda: matched[0] if matched else None
