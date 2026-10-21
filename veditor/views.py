@@ -19,7 +19,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import TemplateView
 from django_scopes import scope, scopes_disabled
-from eventyay.base.models import TalkSlot
+from eventyay.base.models import Resource, TalkSlot
 
 try:
     from eventyay.base.models import Event, Submission
@@ -76,6 +76,24 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
             return unique_slots
 
+    def get_recorded_submission_ids(self, talk_slots: list[TalkSlot]) -> set[int]:
+        """Return submission IDs with a published VEditor video recording resource."""
+        submission_ids = {getattr(slot, "submission_id", None) for slot in talk_slots}
+        submission_ids.discard(None)
+        if not submission_ids:
+            return set()
+
+        with scope(event=self.request.event):
+            return set(
+                Resource.objects.filter(
+                    submission_id__in=submission_ids,
+                    description__iexact="Video Recording",
+                    link__isnull=False,
+                )
+                .exclude(link="")
+                .values_list("submission_id", flat=True)
+            )
+
     def get_context_data(self, **kwargs: Any) -> dict[str, Any]:
         """Populate template context with event details, talk counts, and settings form."""
         context = super().get_context_data(**kwargs)
@@ -85,6 +103,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         context["event"] = event
         context["talks"] = talk_slots
         context["talks_count"] = len(talk_slots)
+        context["recorded_submission_ids"] = self.get_recorded_submission_ids(talk_slots)
 
         # Pre-populate form with saved event settings or platform environment defaults
         saved_url = (

@@ -13,6 +13,7 @@ Exercises the complete user journey across:
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.parse
 from datetime import datetime
@@ -32,6 +33,7 @@ from eventyay.base.models import Event, Organizer, Resource, Room, Schedule, Sub
 
 from tests.mock_veditor import validate_jwt_structure
 from veditor.recording import VEditorRecordingProvider
+from veditor.tasks import process_talk_published
 from veditor.views import ConnectView
 from veditor.webhooks import WebhookView
 
@@ -487,3 +489,155 @@ def test_mock_veditor_bulk_talks_endpoint(mock_veditor):
     assert mock_veditor.synced_talks[0]["external_id"] == "TALK_BULK_1"
     assert mock_veditor.synced_talks[1]["external_id"] == "TALK_BULK_2"
     assert len(mock_veditor.bulk_sync_requests) == 1
+
+
+# ============================================================================
+# Scenario H: Dashboard reflects published recording status
+# ============================================================================
+
+
+def _render_connect_view(integrated_event) -> str:
+    """Helper to render ConnectView and return decoded HTML content."""
+    rf = RequestFactory()
+    request = rf.get(
+        reverse(
+            "plugins:veditor:connect",
+            kwargs={
+                "organizer": integrated_event.organizer.slug,
+                "event": integrated_event.slug,
+            },
+        )
+    )
+    request.user = integrated_event.organizer_user
+    request.event = integrated_event
+    request.organizer = integrated_event.organizer
+    setup_request(request)
+    request.LANGUAGE_CODE = "en"
+    request.META["HTTP_ACCEPT_LANGUAGE"] = "en"
+
+    response = ConnectView.as_view()(
+        request,
+        organizer=integrated_event.organizer.slug,
+        event=integrated_event.slug,
+    )
+
+    assert response.status_code == 200
+    response.render()
+    return response.content.decode("utf-8")
+
+
+PUBLISHED_BADGE_PATTERN = re.compile(
+    r'<span\s+class="label label-success">\s*<i\s+class="fa fa-check"></i>\s*Published\s*</span>',
+    re.DOTALL,
+)
+
+
+def test_dashboard_shows_published_after_talk_published(integrated_event, integrated_talk):
+    """The dashboard must show Published once talk.published stores a recording Resource."""
+    result = process_talk_published(
+        event_id=integrated_event.id,
+        talk_id=integrated_talk.slot.id,
+        external_id=integrated_talk.submission.code,
+        video_url="https://cdn.example.org/videos/keynote-open-source-ai.mp4",
+    )
+    assert result["status"] == "success"
+
+    with scope(event=integrated_event):
+        resource = Resource.objects.get(submission=integrated_talk.submission, description="Video Recording")
+        assert resource.link == "https://cdn.example.org/videos/keynote-open-source-ai.mp4"
+
+        # Explicitly ensure legacy recording_url is absent or cleared to guarantee
+        # the dashboard status is driven strictly by the Resource query path.
+        if hasattr(integrated_talk.submission, "recording_url"):
+            integrated_talk.submission.recording_url = None
+            integrated_talk.submission.save(update_fields=["recording_url"])
+            integrated_talk.submission.refresh_from_db()
+            assert not integrated_talk.submission.recording_url
+
+    content = _render_connect_view(integrated_event)
+    assert PUBLISHED_BADGE_PATTERN.search(content)
+    assert "Waiting for Recording" not in content
+
+
+def test_dashboard_and_provider_handle_duplicate_resources_first_empty(integrated_event, integrated_talk):
+    """When duplicate Video Recording resources exist and the first has an empty link,
+    both the dashboard and the recording provider must agree on the valid recording.
+    """
+    with scope(event=integrated_event):
+        res1 = Resource.objects.create(
+            submission=integrated_talk.submission,
+            description="Video Recording",
+            link="",
+            kind="generic",
+        )
+        res2 = Resource.objects.create(
+            submission=integrated_talk.submission,
+            description="Video Recording",
+            link="https://cdn.example.org/videos/keynote-open-source-ai.mp4",
+            kind="generic",
+        )
+        assert res1.id < res2.id
+
+        if hasattr(integrated_talk.submission, "recording_url"):
+            integrated_talk.submission.recording_url = None
+            integrated_talk.submission.save(update_fields=["recording_url"])
+            integrated_talk.submission.refresh_from_db()
+            assert not integrated_talk.submission.recording_url
+
+    # 1. Dashboard shows Published and not Waiting for Recording
+    content = _render_connect_view(integrated_event)
+    assert PUBLISHED_BADGE_PATTERN.search(content)
+    assert "Waiting for Recording" not in content
+
+    # 2. Recording provider retrieves the second resource and returns a valid player
+    provider = VEditorRecordingProvider(integrated_event)
+    recording = provider.get_recording(integrated_talk.submission)
+    assert "iframe" in recording
+    assert "https://cdn.example.org/videos/keynote-open-source-ai.mp4" in recording["iframe"]
+    assert recording["csp_header"] == "https://cdn.example.org"
+
+
+def test_dashboard_and_provider_when_all_resources_have_empty_link(integrated_event, integrated_talk):
+    """When Video Recording resources exist but all have empty links,
+    the dashboard must show Waiting for Recording and the provider must return {}.
+    """
+    with scope(event=integrated_event):
+        Resource.objects.create(
+            submission=integrated_talk.submission,
+            description="Video Recording",
+            link="",
+            kind="generic",
+        )
+
+        if hasattr(integrated_talk.submission, "recording_url"):
+            integrated_talk.submission.recording_url = None
+            integrated_talk.submission.save(update_fields=["recording_url"])
+            integrated_talk.submission.refresh_from_db()
+            assert not integrated_talk.submission.recording_url
+
+    # 1. Dashboard shows Waiting for Recording and not Published
+    content = _render_connect_view(integrated_event)
+    assert "Waiting for Recording" in content
+    assert not PUBLISHED_BADGE_PATTERN.search(content)
+
+    # 2. Recording provider returns empty dict
+    provider = VEditorRecordingProvider(integrated_event)
+    recording = provider.get_recording(integrated_talk.submission)
+    assert recording == {}
+
+
+def test_dashboard_shows_waiting_for_recording_when_unrecorded(integrated_event, integrated_talk):
+    """Negative control: without any recording Resource or recording_url,
+    the dashboard shows 'Waiting for Recording' and does not show 'Published'.
+    """
+    with scope(event=integrated_event):
+        assert not Resource.objects.filter(submission=integrated_talk.submission).exists()
+        if hasattr(integrated_talk.submission, "recording_url"):
+            integrated_talk.submission.recording_url = None
+            integrated_talk.submission.save(update_fields=["recording_url"])
+            integrated_talk.submission.refresh_from_db()
+            assert not integrated_talk.submission.recording_url
+
+    content = _render_connect_view(integrated_event)
+    assert "Waiting for Recording" in content
+    assert not PUBLISHED_BADGE_PATTERN.search(content)
