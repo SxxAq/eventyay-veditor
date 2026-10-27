@@ -76,3 +76,47 @@ if register_recording_provider is not None:
                 return None
 
         return VEditorRecordingProvider(sender)
+
+
+try:
+    from eventyay.schedule.signals import schedule_release
+except ImportError:
+    schedule_release = None
+
+if schedule_release is not None:
+
+    @receiver(schedule_release, dispatch_uid="veditor_schedule_release")
+    def on_schedule_release(sender, schedule=None, user=None, **kwargs) -> None:
+        """Automatically synchronize schedule and event metadata with VEditor when a schedule is released."""
+        if not sender:
+            return
+        plugin_list = getattr(sender, "plugin_list", None)
+        if isinstance(plugin_list, (list, tuple, set)):
+            if "veditor" not in plugin_list:
+                return
+        else:
+            plugins = getattr(sender, "plugins", None)
+            if not plugins or "veditor" not in str(plugins):
+                return
+
+        from .tasks import sync_event_schedule_task
+
+        event_id = getattr(sender, "id", None) or getattr(sender, "slug", None)
+        if not event_id:
+            return
+
+        from django.conf import settings
+
+        if getattr(settings, "DEBUG", False):
+            try:
+                sync_event_schedule_task(event_id=event_id)
+                return
+            except Exception:
+                pass
+        try:
+            sync_event_schedule_task.delay(event_id=event_id)
+        except Exception:
+            try:
+                sync_event_schedule_task(event_id=event_id)
+            except Exception:
+                pass

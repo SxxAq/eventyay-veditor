@@ -105,6 +105,21 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         context["talks_count"] = len(talk_slots)
         context["recorded_submission_ids"] = self.get_recorded_submission_ids(talk_slots)
 
+        start_date = getattr(event, "date_from", None)
+        end_date = getattr(event, "date_to", None)
+        event_duration_days = 1
+        if start_date and end_date:
+            d_start = start_date.date() if hasattr(start_date, "date") else start_date
+            d_end = end_date.date() if hasattr(end_date, "date") else end_date
+            if hasattr(d_start, "year") and hasattr(d_end, "year"):
+                event_duration_days = max(1, (d_end - d_start).days + 1)
+        elif start_date:
+            event_duration_days = 1
+
+        context["event_start_date"] = start_date
+        context["event_end_date"] = end_date
+        context["event_duration_days"] = event_duration_days
+
         # Pre-populate form with saved event settings or platform environment defaults
         saved_url = (
             (event.settings.get("veditor_api_base_url") if hasattr(event, "settings") else None)
@@ -272,6 +287,10 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             try:
                 client = VEditorClient(event=event)
                 target_event_id = client.get_scoped_event_id()
+                try:
+                    client.sync_event(event=event)
+                except Exception as ev_exc:
+                    logger.debug("sync_event non-fatal: %s", ev_exc)
                 res = client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
                 imported_count = res.get("imported_count", len(talk_slots)) if isinstance(res, dict) else len(talk_slots)
                 messages.success(
@@ -298,6 +317,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                 video_url = room_form.cleaned_data.get("video_url") or None
                 video_file = room_form.cleaned_data.get("video_file") or None
                 recording_start = room_form.cleaned_data.get("recording_start") or None
+                target_date = room_form.cleaned_data.get("target_date") or None
 
                 try:
                     client = VEditorClient(event=event)
@@ -306,6 +326,10 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     # 1. Automatically ensure talks & room schedules are synchronized first!
                     talk_slots = self.get_talk_slots()
                     try:
+                        try:
+                            client.sync_event(event=event)
+                        except Exception as ev_exc:
+                            logger.debug("sync_event non-fatal: %s", ev_exc)
                         client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
                     except (VEditorError, ValueError) as sync_exc:
                         logger.error("Auto-sync prior to room attachment failed for %s: %s", room_name, sync_exc)
@@ -320,14 +344,18 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                             )
                         )
 
+                    attach_kwargs = {
+                        "room": room_name,
+                        "event_id": target_event_id,
+                        "video_url": video_url,
+                        "video_file": video_file,
+                        "recording_start": recording_start,
+                    }
+                    if target_date:
+                        attach_kwargs["target_date"] = target_date
+
                     # 2. Attach recording via URL or uploaded file
-                    res = client.attach_room_recording(
-                        room=room_name,
-                        event_id=target_event_id,
-                        video_url=video_url,
-                        video_file=video_file,
-                        recording_start=recording_start,
-                    )
+                    res = client.attach_room_recording(**attach_kwargs)
                     attached_count = res.get("attached_count", 0) if isinstance(res, dict) else 0
                     talk_ids = res.get("talk_ids", []) if isinstance(res, dict) else []
                     if talk_ids:
@@ -439,6 +467,10 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         # 1. Bulk synchronize talks unless explicitly skipped (open_studio action)
         if action != "open_studio":
             try:
+                try:
+                    client.sync_event(event=event)
+                except Exception as ev_exc:
+                    logger.debug("sync_event non-fatal: %s", ev_exc)
                 client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
             except (VEditorError, ValueError) as exc:
                 messages.error(

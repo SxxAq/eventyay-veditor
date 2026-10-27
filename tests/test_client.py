@@ -18,7 +18,7 @@ from veditor.exceptions import (
     VEditorNetworkError,
     VEditorSyncError,
 )
-from veditor.mappers import serialize_talk, serialize_talks, to_utc_isoformat
+from veditor.mappers import serialize_event, serialize_talk, serialize_talks, to_iso_date, to_utc_isoformat
 
 # ============================================================================
 # Mapper Unit Tests
@@ -938,3 +938,182 @@ def test_attach_room_recording_omitted_event_id_auto_resolves():
     post_req = [c for c in responses.calls if c.request.method == "POST"][0]
     req_body = json.loads(post_req.request.body)
     assert req_body["event_id"] == 777
+
+
+# ============================================================================
+# Event Dates & Full Schedule Sync Tests (Issue #50)
+# ============================================================================
+
+
+def test_to_iso_date():
+    assert to_iso_date(None) is None
+    assert to_iso_date("2026-10-25") == "2026-10-25"
+    assert to_iso_date("2026-10-25T14:30:00Z") == "2026-10-25"
+    assert to_iso_date(datetime(2026, 10, 25, 12, 0, tzinfo=UTC)) == "2026-10-25"
+
+
+def test_serialize_event_dates_and_metadata():
+    event = SimpleNamespace(
+        id=99,
+        slug="pycon-2026",
+        name="PyCon 2026",
+        date_from=datetime(2026, 10, 25, 9, 0, tzinfo=UTC),
+        date_to=datetime(2026, 10, 27, 18, 0, tzinfo=UTC),
+        settings={"speaker_review_window_days": 14},
+    )
+    payload = serialize_event(event)
+    assert payload["name"] == "PyCon 2026"
+    assert payload["external_id"] == "pycon-2026"
+    assert payload["source"] == "eventyay"
+    assert payload["start_date"] == "2026-10-25"
+    assert payload["end_date"] == "2026-10-27"
+    assert payload["speaker_magic_link_expire_hours"] == 14 * 24
+
+
+def test_serialize_event_single_day_fallback():
+    event_dict = {
+        "id": 10,
+        "name": "One Day Summit",
+        "date_from": "2026-11-01",
+        "date_to": None,
+    }
+    payload = serialize_event(event_dict)
+    assert payload["name"] == "One Day Summit"
+    assert payload["start_date"] == "2026-11-01"
+    assert payload["end_date"] == "2026-11-01"
+
+
+@responses.activate
+def test_sync_event_patches_existing_event():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    event = SimpleNamespace(
+        id=123,
+        slug="devconf-2026",
+        name="DevConf 2026",
+        date_from=datetime(2026, 10, 20, 9, 0, tzinfo=UTC),
+        date_to=datetime(2026, 10, 22, 17, 0, tzinfo=UTC),
+    )
+
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[{"id": 42, "name": "DevConf 2026", "external_id": "devconf-2026"}],
+        status=200,
+    )
+    responses.add(
+        responses.PATCH,
+        "https://veditor.test/events/42",
+        json={"id": 42, "name": "DevConf 2026", "start_date": "2026-10-20", "end_date": "2026-10-22"},
+        status=200,
+    )
+
+    res = client.sync_event(event=event)
+    assert res["id"] == 42
+    assert res["start_date"] == "2026-10-20"
+    assert res["end_date"] == "2026-10-22"
+
+    patch_req = [c for c in responses.calls if c.request.method == "PATCH"][0]
+    body = json.loads(patch_req.request.body)
+    assert body["start_date"] == "2026-10-20"
+    assert body["end_date"] == "2026-10-22"
+    assert body["external_id"] == "devconf-2026"
+
+
+@responses.activate
+def test_sync_event_posts_when_not_found():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    event = SimpleNamespace(
+        id=55,
+        slug="newconf-2026",
+        name="NewConf 2026",
+        date_from=datetime(2026, 11, 5, 9, 0, tzinfo=UTC),
+        date_to=datetime(2026, 11, 6, 17, 0, tzinfo=UTC),
+    )
+
+    # GET /events returns empty list -> event not found
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[],
+        status=200,
+    )
+    responses.add(
+        responses.POST,
+        "https://veditor.test/events",
+        json={"id": 88, "name": "NewConf 2026", "start_date": "2026-11-05", "end_date": "2026-11-06"},
+        status=201,
+    )
+
+    res = client.sync_event(event=event)
+    assert res["id"] == 88
+    post_req = [c for c in responses.calls if c.request.method == "POST"][0]
+    body = json.loads(post_req.request.body)
+    assert body["name"] == "NewConf 2026"
+    assert body["start_date"] == "2026-11-05"
+
+
+@responses.activate
+def test_sync_full_schedule_chains_event_and_talks():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    event = SimpleNamespace(
+        id=77,
+        slug="chain-conf",
+        name="Chain Conf",
+        date_from=datetime(2026, 10, 25, 9, 0, tzinfo=UTC),
+        date_to=datetime(2026, 10, 27, 18, 0, tzinfo=UTC),
+    )
+    talk_slot = SimpleNamespace(
+        id=1,
+        submission=SimpleNamespace(code="S-1", title="Intro Talk", speakers=[]),
+        room=SimpleNamespace(name="Hall A"),
+        start=datetime(2026, 10, 25, 10, 0, tzinfo=UTC),
+        end=datetime(2026, 10, 25, 11, 0, tzinfo=UTC),
+    )
+
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[{"id": 77, "name": "Chain Conf", "external_id": "chain-conf"}],
+        status=200,
+    )
+    responses.add(
+        responses.PATCH,
+        "https://veditor.test/events/77",
+        json={"id": 77, "name": "Chain Conf", "start_date": "2026-10-25", "end_date": "2026-10-27"},
+        status=200,
+    )
+    responses.add(
+        responses.POST,
+        "https://veditor.test/talks/schedule/import",
+        json={"status": "ok", "imported_count": 1},
+        status=200,
+    )
+
+    result = client.sync_full_schedule(event=event, talk_slots=[talk_slot])
+    assert result["status"] == "ok"
+    assert result["imported_count"] == 1
+    assert result["event"]["start_date"] == "2026-10-25"
+
+
+@responses.activate
+def test_attach_room_recording_with_target_date():
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    responses.add(
+        responses.POST,
+        "https://veditor.test/talks/room/attach-recording",
+        json={"status": "ok", "attached_count": 2, "room": "Hall 1", "event_id": 10, "talk_ids": [1, 2]},
+        status=200,
+    )
+
+    result = client.attach_room_recording(
+        room="Hall 1",
+        event_id=10,
+        video_url="https://example.com/day1.mp4",
+        target_date="2026-10-25",
+    )
+
+    assert result["status"] == "ok"
+    post_req = [c for c in responses.calls if c.request.method == "POST"][0]
+    body = json.loads(post_req.request.body)
+    assert body["target_date"] == "2026-10-25"
+    assert body["room"] == "Hall 1"

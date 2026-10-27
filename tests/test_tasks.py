@@ -660,3 +660,71 @@ def test_manual_resend_speaker_link_view_fallback_exception_handled(configured_e
     assert response.status_code == 302
     messages = list(request._messages)
     assert any("Failed to dispatch speaker review link" in str(m) for m in messages)
+
+
+# ============================================================================
+# sync_event_schedule_task and schedule_release signal tests
+# ============================================================================
+
+
+def test_sync_event_schedule_task_success(configured_event, mock_tasks_orm):
+    """Verify sync_event_schedule_task resolves event and delegates to sync_full_schedule."""
+    from veditor.tasks import sync_event_schedule_task
+
+    with patch("veditor.tasks.VEditorClient.sync_full_schedule") as mock_sync:
+        mock_sync.return_value = {
+            "status": "ok",
+            "event": {"id": 42, "name": configured_event.name},
+            "talks": {"status": "ok", "imported_count": 0},
+        }
+
+        result = sync_event_schedule_task(event_id=configured_event.id)
+
+    assert result["status"] == "ok"
+    mock_sync.assert_called_once()
+    call_kwargs = mock_sync.call_args[1]
+    assert call_kwargs["event"] == configured_event
+    assert isinstance(call_kwargs["talk_slots"], list)
+
+
+def test_sync_event_schedule_task_not_found(mock_tasks_orm):
+    """Verify sync_event_schedule_task returns not_found status when event does not exist."""
+    from veditor.tasks import sync_event_schedule_task
+
+    result = sync_event_schedule_task(event_id=999999)
+    assert result["status"] == "not_found"
+    assert "not found" in result["message"]
+
+
+def test_sync_event_schedule_task_unconfigured(configured_event, mock_tasks_orm):
+    """Verify sync_event_schedule_task returns skipped when VEditor credentials are missing."""
+    from veditor.tasks import sync_event_schedule_task
+
+    configured_event.settings.set("veditor_api_key", "")
+    with patch.dict("os.environ", {}, clear=True):
+        result = sync_event_schedule_task(event_id=configured_event.id)
+
+    assert result["status"] == "skipped"
+    assert "not configured" in result["message"]
+
+
+def test_on_schedule_release_signal_dispatches_task(configured_event):
+    """Verify on_schedule_release signal handler invokes sync_event_schedule_task."""
+    from veditor.signals import on_schedule_release
+
+    configured_event.plugin_list = ["veditor"]
+
+    with patch("veditor.tasks.sync_event_schedule_task.delay") as mock_delay:
+        on_schedule_release(sender=configured_event)
+        mock_delay.assert_called_once_with(event_id=configured_event.id)
+
+
+def test_on_schedule_release_ignores_event_without_plugin(configured_event):
+    """Verify on_schedule_release ignores events that do not have the veditor plugin enabled."""
+    from veditor.signals import on_schedule_release
+
+    configured_event.plugin_list = ["other_plugin"]
+
+    with patch("veditor.tasks.sync_event_schedule_task.delay") as mock_delay:
+        on_schedule_release(sender=configured_event)
+        mock_delay.assert_not_called()
