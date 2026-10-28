@@ -241,7 +241,7 @@
                         {% if event_start_date %}
                             <span class="label label-info veditor-label-webhook" title="{% trans 'Event schedule duration' %}">
                                 <i class="fa fa-calendar"></i>
-                                {% if event_end_date and event_end_date != event_start_date %}
+                                {% if event_duration_days > 1 and event_end_date %}
                                     {{ event_start_date|date:"SHORT_DATE_FORMAT" }} – {{ event_end_date|date:"SHORT_DATE_FORMAT" }} ({{ event_duration_days }} {% trans "days" %})
                                 {% else %}
                                     {{ event_start_date|date:"SHORT_DATE_FORMAT" }} (1 {% trans "day" %})

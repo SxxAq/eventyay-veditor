@@ -665,6 +665,12 @@ def sync_event_schedule_task(event_id: int | str) -> dict[str, Any]:
 
         try:
             return client.sync_full_schedule(event=event_obj, talk_slots=talk_slots)
+        except VEditorNetworkError:
+            logger.warning(
+                "Network error syncing schedule for event %s, retrying via Celery...",
+                event_obj.slug,
+            )
+            raise
         except Exception as exc:
             logger.exception("Failed to sync schedule for event %s: %s", event_obj.slug, exc)
             return {"status": "error", "message": str(exc), "event_id": event_id}

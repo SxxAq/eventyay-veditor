@@ -108,16 +108,39 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         start_date = getattr(event, "date_from", None)
         end_date = getattr(event, "date_to", None)
         event_duration_days = 1
-        if start_date and end_date:
-            d_start = start_date.date() if hasattr(start_date, "date") else start_date
-            d_end = end_date.date() if hasattr(end_date, "date") else end_date
+
+        tz_val = getattr(event, "timezone", None)
+        event_tz = None
+        if tz_val:
+            from datetime import tzinfo
+            from zoneinfo import ZoneInfo
+
+            if isinstance(tz_val, tzinfo):
+                event_tz = tz_val
+            elif isinstance(tz_val, str):
+                try:
+                    event_tz = ZoneInfo(tz_val.strip())
+                except Exception:
+                    event_tz = None
+
+        d_start_dt = start_date
+        d_end_dt = end_date
+        if event_tz:
+            if hasattr(start_date, "astimezone") and getattr(start_date, "tzinfo", None):
+                d_start_dt = start_date.astimezone(event_tz)
+            if hasattr(end_date, "astimezone") and getattr(end_date, "tzinfo", None):
+                d_end_dt = end_date.astimezone(event_tz)
+
+        if d_start_dt and d_end_dt:
+            d_start = d_start_dt.date() if hasattr(d_start_dt, "date") else d_start_dt
+            d_end = d_end_dt.date() if hasattr(d_end_dt, "date") else d_end_dt
             if hasattr(d_start, "year") and hasattr(d_end, "year"):
                 event_duration_days = max(1, (d_end - d_start).days + 1)
-        elif start_date:
+        elif d_start_dt:
             event_duration_days = 1
 
-        context["event_start_date"] = start_date
-        context["event_end_date"] = end_date
+        context["event_start_date"] = d_start_dt
+        context["event_end_date"] = d_end_dt
         context["event_duration_days"] = event_duration_days
 
         # Pre-populate form with saved event settings or platform environment defaults
@@ -287,10 +310,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             try:
                 client = VEditorClient(event=event)
                 target_event_id = client.get_scoped_event_id()
-                try:
-                    client.sync_event(event=event)
-                except Exception as ev_exc:
-                    logger.debug("sync_event non-fatal: %s", ev_exc)
+                client.sync_event(event=event)
                 res = client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
                 imported_count = res.get("imported_count", len(talk_slots)) if isinstance(res, dict) else len(talk_slots)
                 messages.success(
@@ -326,10 +346,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
                     # 1. Automatically ensure talks & room schedules are synchronized first!
                     talk_slots = self.get_talk_slots()
                     try:
-                        try:
-                            client.sync_event(event=event)
-                        except Exception as ev_exc:
-                            logger.debug("sync_event non-fatal: %s", ev_exc)
+                        client.sync_event(event=event)
                         client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
                     except (VEditorError, ValueError) as sync_exc:
                         logger.error("Auto-sync prior to room attachment failed for %s: %s", room_name, sync_exc)
@@ -467,10 +484,7 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         # 1. Bulk synchronize talks unless explicitly skipped (open_studio action)
         if action != "open_studio":
             try:
-                try:
-                    client.sync_event(event=event)
-                except Exception as ev_exc:
-                    logger.debug("sync_event non-fatal: %s", ev_exc)
+                client.sync_event(event=event)
                 client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
             except (VEditorError, ValueError) as exc:
                 messages.error(
@@ -659,6 +673,7 @@ class SpeakerReviewLaunchView(LoginRequiredMixin, View):
                 return HttpResponseRedirect(self.get_fallback_url(request, event_obj))
 
             try:
+                client.sync_event(event=event_obj)
                 target_slot = getattr(submission, "slots", None)
                 slot_obj = target_slot.first() if target_slot and hasattr(target_slot, "first") else None
                 if slot_obj is None:

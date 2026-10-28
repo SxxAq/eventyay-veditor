@@ -1117,3 +1117,57 @@ def test_attach_room_recording_with_target_date():
     body = json.loads(post_req.request.body)
     assert body["target_date"] == "2026-10-25"
     assert body["room"] == "Hall 1"
+
+
+@responses.activate
+def test_sync_event_propagates_network_error():
+    """Verify sync_event re-raises VEditorNetworkError rather than falling back to POST."""
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key")
+    event = SimpleNamespace(
+        id=99,
+        slug="net-err-conf",
+        name="Net Err Conf",
+        date_from=datetime(2026, 11, 5, 9, 0, tzinfo=UTC),
+        date_to=datetime(2026, 11, 6, 17, 0, tzinfo=UTC),
+    )
+
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        status=502,
+    )
+
+    with pytest.raises(VEditorNetworkError):
+        client.sync_event(event=event)
+
+    # Ensure no POST /events was attempted
+    assert not any(c.request.method == "POST" for c in responses.calls)
+
+
+def test_to_iso_date_with_timezone():
+    """Verify to_iso_date converts timezone-aware datetimes to the target timezone."""
+    from zoneinfo import ZoneInfo
+
+    # 10 PM UTC on 2026-09-24 is 6 AM on 2026-09-25 in Asia/Singapore (+08:00)
+    utc_dt = datetime(2026, 9, 24, 22, 0, tzinfo=UTC)
+    sg_tz = ZoneInfo("Asia/Singapore")
+
+    assert to_iso_date(utc_dt) == "2026-09-24"
+    assert to_iso_date(utc_dt, tz=sg_tz) == "2026-09-25"
+
+
+def test_serialize_event_with_timezone():
+    """Verify serialize_event respects event.timezone when extracting date boundaries."""
+    event = SimpleNamespace(
+        id=10,
+        slug="sg-summit",
+        name="Singapore Summit",
+        date_from=datetime(2026, 9, 24, 22, 0, tzinfo=UTC),
+        date_to=datetime(2026, 9, 26, 10, 0, tzinfo=UTC),
+        timezone="Asia/Singapore",
+        settings=None,
+    )
+
+    payload = serialize_event(event)
+    assert payload["start_date"] == "2026-09-25"
+    assert payload["end_date"] == "2026-09-26"

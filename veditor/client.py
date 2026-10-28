@@ -19,6 +19,7 @@ from .exceptions import (
     VEditorAuthError,
     VEditorConfigError,
     VEditorError,
+    VEditorEventNotFoundError,
     VEditorNetworkError,
     VEditorSyncError,
 )
@@ -294,8 +295,8 @@ class VEditorClient:
         target_event_id: int | None = None
         try:
             target_event_id = self.get_scoped_event_id()
-        except Exception as exc:
-            logger.debug("Could not resolve existing scoped event ID for event sync: %s", exc)
+        except VEditorEventNotFoundError:
+            logger.debug("No existing VEditor event found for event sync; creating via POST /events.")
 
         if target_event_id is not None:
             return self._request("PATCH", f"/events/{target_event_id}", json=payload)
@@ -401,7 +402,7 @@ class VEditorClient:
                 response_data=response_data,
             )
 
-        raise VEditorError("No event associated with this API key was found in VEditor.", response_data=response_data)
+        raise VEditorEventNotFoundError("No event associated with this API key was found in VEditor.", response_data=response_data)
 
     def request_sso_jwt(
         self,
