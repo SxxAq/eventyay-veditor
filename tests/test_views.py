@@ -15,6 +15,7 @@ from eventyay.control.signals import nav_event, nav_event_common
 from veditor.exceptions import (
     VEditorConfigError,
     VEditorError,
+    VEditorEventNotFoundError,
     VEditorNetworkError,
     VEditorSyncError,
 )
@@ -1568,3 +1569,30 @@ def test_connect_view_post_sync_schedule_stops_on_sync_event_failure(event, orga
         assert not mock_client.sync_talks.called
         messages = [str(m.message) for m in request._messages]
         assert any("Failed to synchronize talks with VEditor" in m for m in messages)
+
+
+def test_connect_view_post_sync_schedule_creates_event_before_lookup(event, organizer_user, rf):
+    """Verify ConnectView sync_schedule uses ID returned by sync_event even when get_scoped_event_id would fail."""
+    request = setup_request(
+        rf.post(
+            reverse("plugins:veditor:connect", kwargs={"organizer": event.organizer.slug, "event": event.slug}),
+            data={"action": "sync_schedule"},
+        )
+    )
+    request.user = organizer_user
+    request.event = event
+    request.organizer = event.organizer
+
+    with patch("veditor.views.VEditorClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.sync_event.return_value = {"id": 999, "name": event.name}
+        mock_client.get_scoped_event_id.side_effect = VEditorEventNotFoundError("Event not found yet")
+        mock_client.sync_talks.return_value = {"status": "ok", "imported_count": 5}
+
+        view = ConnectView.as_view()
+        response = view(request, organizer=event.organizer.slug, event=event.slug)
+
+        assert response.status_code == 302
+        mock_client.sync_event.assert_called_once_with(event=event)
+        mock_client.sync_talks.assert_called_once_with(event_id=999, talk_slots=[])
+        assert not mock_client.get_scoped_event_id.called

@@ -293,10 +293,15 @@ class VEditorClient:
 
         payload = serialize_event(target_event)
         target_event_id: int | None = None
+        orig_event = self.event
         try:
-            target_event_id = self.get_scoped_event_id()
-        except VEditorEventNotFoundError:
-            logger.debug("No existing VEditor event found for event sync; creating via POST /events.")
+            self.event = target_event
+            try:
+                target_event_id = self.get_scoped_event_id()
+            except VEditorEventNotFoundError:
+                logger.debug("No existing VEditor event found for event sync; creating via POST /events.")
+        finally:
+            self.event = orig_event
 
         if target_event_id is not None:
             return self._request("PATCH", f"/events/{target_event_id}", json=payload)
@@ -346,11 +351,6 @@ class VEditorClient:
         """
         response_data = self._request("GET", "/events")
         if isinstance(response_data, list) and response_data:
-            if len(response_data) == 1:
-                first_event = response_data[0]
-                if isinstance(first_event, dict) and "id" in first_event:
-                    return int(first_event["id"])
-
             if self.event is not None:
                 event_slug = getattr(self.event, "slug", None)
                 event_id = getattr(self.event, "id", None)
@@ -392,10 +392,16 @@ class VEditorClient:
                         response_data=response_data,
                     )
 
-                raise VEditorError(
-                    f"Multiple events returned by VEditor for API key, and cannot disambiguate for event '{event_slug}'.",
+                raise VEditorEventNotFoundError(
+                    f"No matching event found for '{event_slug or event_name}' in VEditor; cannot disambiguate.",
                     response_data=response_data,
                 )
+
+            # If self.event is None, only return if a single event exists for this API key
+            if len(response_data) == 1:
+                first_event = response_data[0]
+                if isinstance(first_event, dict) and "id" in first_event:
+                    return int(first_event["id"])
 
             raise VEditorError(
                 "Multiple events returned by VEditor API key but no event context provided to disambiguate.",

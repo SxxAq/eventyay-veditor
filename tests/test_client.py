@@ -15,6 +15,7 @@ from veditor.exceptions import (
     VEditorAuthError,
     VEditorConfigError,
     VEditorError,
+    VEditorEventNotFoundError,
     VEditorNetworkError,
     VEditorSyncError,
 )
@@ -1171,3 +1172,56 @@ def test_serialize_event_with_timezone():
     payload = serialize_event(event)
     assert payload["start_date"] == "2026-09-25"
     assert payload["end_date"] == "2026-09-26"
+
+
+@responses.activate
+def test_get_scoped_event_id_rejects_unrelated_single_event():
+    """Verify get_scoped_event_id raises VEditorEventNotFoundError if the single returned event belongs to another event."""
+    event = SimpleNamespace(id=10, slug="ruby-conf", name="Ruby Conference")
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key", event=event)
+
+    # VEditor returns 1 event, but for a completely different conference
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[{"id": 42, "name": "Python Conference", "external_id": "python-conf"}],
+        status=200,
+    )
+
+    with pytest.raises(VEditorEventNotFoundError):
+        client.get_scoped_event_id()
+
+
+@responses.activate
+def test_sync_event_creates_when_single_event_is_unrelated():
+    """Verify sync_event posts a new event if the single remote event does not match local event identity."""
+    event = SimpleNamespace(
+        id=10,
+        slug="ruby-conf",
+        name="Ruby Conference",
+        date_from=datetime(2026, 11, 1, 9, 0, tzinfo=UTC),
+        date_to=datetime(2026, 11, 2, 17, 0, tzinfo=UTC),
+    )
+    client = VEditorClient(base_url="https://veditor.test", api_key="test-key", event=event)
+
+    # GET /events returns Python Conference
+    responses.add(
+        responses.GET,
+        "https://veditor.test/events",
+        json=[{"id": 42, "name": "Python Conference", "external_id": "python-conf"}],
+        status=200,
+    )
+    # Must POST Ruby Conference rather than PATCHing Python Conference
+    responses.add(
+        responses.POST,
+        "https://veditor.test/events",
+        json={"id": 99, "name": "Ruby Conference", "external_id": "ruby-conf"},
+        status=201,
+    )
+
+    res = client.sync_event(event=event)
+    assert res["id"] == 99
+
+    # Verify no PATCH was performed against ID 42
+    assert not any(c.request.method == "PATCH" for c in responses.calls)
+    assert any(c.request.method == "POST" for c in responses.calls)

@@ -310,8 +310,8 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             talk_slots = self.get_talk_slots()
             try:
                 client = VEditorClient(event=event)
-                target_event_id = client.get_scoped_event_id()
-                client.sync_event(event=event)
+                sync_res = client.sync_event(event=event)
+                target_event_id = (sync_res.get("id") if isinstance(sync_res, dict) else None) or client.get_scoped_event_id()
                 res = client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
                 imported_count = res.get("imported_count", len(talk_slots)) if isinstance(res, dict) else len(talk_slots)
                 messages.success(
@@ -342,12 +342,12 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
                 try:
                     client = VEditorClient(event=event)
-                    target_event_id = client.get_scoped_event_id()
 
                     # 1. Automatically ensure talks & room schedules are synchronized first!
                     talk_slots = self.get_talk_slots()
                     try:
-                        client.sync_event(event=event)
+                        sync_res = client.sync_event(event=event)
+                        target_event_id = (sync_res.get("id") if isinstance(sync_res, dict) else None) or client.get_scoped_event_id()
                         client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
                     except (VEditorError, ValueError) as sync_exc:
                         logger.error("Auto-sync prior to room attachment failed for %s: %s", room_name, sync_exc)
@@ -472,8 +472,8 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
 
         try:
             client = VEditorClient(event=event)
-            # Auto-resolve target event ID from the event-scoped API key
-            target_event_id = client.get_scoped_event_id()
+            sync_res = client.sync_event(event=event)
+            target_event_id = (sync_res.get("id") if isinstance(sync_res, dict) else None) or client.get_scoped_event_id()
         except (VEditorError, ValueError) as exc:
             messages.error(
                 request,
@@ -485,7 +485,6 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
         # 1. Bulk synchronize talks unless explicitly skipped (open_studio action)
         if action != "open_studio":
             try:
-                client.sync_event(event=event)
                 client.sync_talks(event_id=target_event_id, talk_slots=talk_slots)
             except (VEditorError, ValueError) as exc:
                 messages.error(
