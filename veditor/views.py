@@ -131,16 +131,17 @@ class ConnectView(EventPermissionRequiredMixin, TemplateView):
             if hasattr(end_date, "astimezone") and getattr(end_date, "tzinfo", None):
                 d_end_dt = end_date.astimezone(event_tz)
 
-        if d_start_dt and d_end_dt:
-            d_start = d_start_dt.date() if hasattr(d_start_dt, "date") else d_start_dt
-            d_end = d_end_dt.date() if hasattr(d_end_dt, "date") else d_end_dt
+        d_start = d_start_dt.date() if hasattr(d_start_dt, "date") else d_start_dt
+        d_end = d_end_dt.date() if hasattr(d_end_dt, "date") else d_end_dt
+
+        if d_start and d_end:
             if hasattr(d_start, "year") and hasattr(d_end, "year"):
                 event_duration_days = max(1, (d_end - d_start).days + 1)
-        elif d_start_dt:
+        elif d_start:
             event_duration_days = 1
 
-        context["event_start_date"] = d_start_dt
-        context["event_end_date"] = d_end_dt
+        context["event_start_date"] = d_start
+        context["event_end_date"] = d_end
         context["event_duration_days"] = event_duration_days
 
         # Pre-populate form with saved event settings or platform environment defaults
@@ -673,7 +674,9 @@ class SpeakerReviewLaunchView(LoginRequiredMixin, View):
                 return HttpResponseRedirect(self.get_fallback_url(request, event_obj))
 
             try:
-                client.sync_event(event=event_obj)
+                sync_res = client.sync_event(event=event_obj)
+                if isinstance(sync_res, dict) and sync_res.get("id"):
+                    target_event_id = sync_res["id"]
                 target_slot = getattr(submission, "slots", None)
                 slot_obj = target_slot.first() if target_slot and hasattr(target_slot, "first") else None
                 if slot_obj is None:

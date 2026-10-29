@@ -1460,8 +1460,8 @@ def test_connect_view_get_context_data_event_dates(event, organizer_user, rf):
     view.setup(request, organizer=event.organizer.slug, event=event.slug)
     context = view.get_context_data()
 
-    assert context["event_start_date"] == event.date_from
-    assert context["event_end_date"] == event.date_to
+    assert context["event_start_date"] == event.date_from.date()
+    assert context["event_end_date"] == event.date_to.date()
     assert context["event_duration_days"] == 3
 
 
